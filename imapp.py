@@ -22,8 +22,8 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-22 22:45:55 +0100 (Tue, 22 Apr 2008) $
-# $LastChangedRevision: 327 $
+# $LastChangedDate: 2008-04-28 12:49:27 +0100 (Mon, 28 Apr 2008) $
+# $LastChangedRevision: 332 $
 # $LastChangedBy: helder $
 # 
 
@@ -53,7 +53,7 @@ D_NOTPARSED = 8
 Debug = D_NOTPARSED
 IMAP4_PORT = 143
 IMAP4_SSL_PORT = 993
-max_log = 100
+MAXLOG = 100
 CRLF = '\r\n'
 SP = ' '
 
@@ -71,7 +71,7 @@ mailbox_list_re = re.compile( r'\((?P<attributes>.*?)\)' + SP + \
                               r'"(?P<name>.*?)"' )
 
 
-class IMAP4P(IMAP4):
+class IMAP4P:
     '''
     This class implements an IMAP client.
     
@@ -134,9 +134,46 @@ class IMAP4P(IMAP4):
         deleted.
     '''
     
-    def __init__(self, host, port=IMAP4_PORT, infolog = InfoLog(max_log),
-        autologout = True ):
-        IMAP4.__init__(self, host, port)
+    class Error(Exception): 
+        '''Logical errors - debug required'''
+        pass    
+    class Abort(Exception): 
+        '''Service errors - close and retry'''
+        pass    
+    class ReadOnly(Exception): 
+        '''Mailbox status changed to READ-ONLY'''
+        
+        pass 
+    
+    def __init__(self, 
+            host, 
+            port=None,
+            ssl = False,
+            keyfile = None, 
+            certfile = None, 
+            infolog = InfoLog(MAXLOG),
+            autologout = True ):
+                
+        # Choose the right connection, and then connect to the server
+        if not port:
+            if ssl:
+                port = IMAP4_SSL_PORT
+            else:
+                port = IMAP4_PORT
+        
+        if ssl:
+            self.__IMAP4 = IMAP4_SSL( host = host, port = port, 
+                keyfile = keyfile, certfile = certfile,
+                parse_command = self.parse_command )
+        else:
+            self.__IMAP4 = IMAP4( host = host, port = port, 
+                parse_command = self.parse_command )
+        
+        # Wrap IMAP4
+        self.welcome = self.__IMAP4.welcome
+        self.send_command = self.__IMAP4.send_command
+        self.state = self.__IMAP4.state
+        
         # Server status
         self.sstatus = {}
 
@@ -939,25 +976,6 @@ class IMAP4P(IMAP4):
             return self.fetch_uid( message_list, message_parts )
         else:
             return self.fetch( message_list, message_parts )
- 
-
-class IMAP4P_SSL(IMAP4_SSL, IMAP4P):
-    def __init__(self, host, port=IMAP4_SSL_PORT, keyfile = None, 
-        certfile = None, infolog = InfoLog(max_log)):
-            
-        IMAP4_SSL.__init__(self, host, port, keyfile, certfile)
-        # Server status
-        self.sstatus = {}
-
-        # Status messages from the server
-        self.infolog = infolog
-        self.infolog.addEntry('WELCOME', self.welcome)
-        
-        self.capabilities = []
-        self.as_uid = None
-        self.as_sort = None
-        
-    parse_command = IMAP4P.parse_command
 
 if __name__ == '__main__':
     import getopt, getpass, sys

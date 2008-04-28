@@ -22,8 +22,8 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-22 22:45:55 +0100 (Tue, 22 Apr 2008) $
-# $LastChangedRevision: 327 $
+# $LastChangedDate: 2008-04-28 12:49:27 +0100 (Mon, 28 Apr 2008) $
+# $LastChangedRevision: 332 $
 # $LastChangedBy: helder $
 # 
 
@@ -118,7 +118,7 @@ class IMAP4:
         '''Mailbox status changed to READ-ONLY'''
         pass 
     
-    def __init__(self, host, port=IMAP4_PORT):
+    def __init__(self, host, port=IMAP4_PORT, parse_command = None):
         # Connection
         self.host = host
         self.port = port
@@ -141,6 +141,11 @@ class IMAP4:
         self.state = 'LOGOUT'
         
         self.welcome = self._get_response() 
+        
+        if parse_command:
+            self.parse_command = parse_command
+        else:
+            self.parse_command = self.dummy_parse_command
         
         if 'PREAUTH' in self.welcome:
             self.state = 'AUTH'
@@ -322,9 +327,9 @@ class IMAP4:
         
         return self.parse_command(tag, response)
         
-    def parse_command(self, tag, response):
-        '''Further processing of the server response. This can and should be 
-        overrided. This method is called by L{read_responses<read_responses>}.
+    def dummy_parse_command(self, tag, response):
+        '''Further processing of the server response. 
+        This method is called by L{read_responses<read_responses>}.
         
         @param tag: the tag used on the command.
         @param response: a server response on the format::
@@ -417,10 +422,15 @@ class IMAP4_SSL(IMAP4):
 
     for more documentation see the docstring of the parent class IMAP4.
     """
-    def __init__(self, host = '', port = IMAP4_SSL_PORT, keyfile = None, certfile = None):
+    def __init__(self, host, 
+        port = IMAP4_SSL_PORT, 
+        keyfile = None, 
+        certfile = None, 
+        parse_command=None):
+            
         self.keyfile = keyfile
         self.certfile = certfile
-        IMAP4.__init__(self, host, port)
+        IMAP4.__init__(self, host=host, port=port, parse_command=parse_command)
 
     def open(self, host = '', port = IMAP4_SSL_PORT):
         """Setup connection to remote server on "host:port".
