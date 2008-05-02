@@ -75,13 +75,6 @@ class IMAP4P:
     '''
     This class implements an IMAP client.
     
-    Since the IMAP server responses can arrive at the client without being 
-    asked for, I've opted to contruct some sort of a state machine. Every IMAP
-    command defined here will return a boolean value, True means that the 
-    command ended successfully with an OK answer, False means that we've 
-    received a NO tagged response. If the server returns a BAD tagged response 
-    an exception is raised.
-    
     The state of the client is stored in <instance>.sstatus, this is a 
     dictionary. 
     
