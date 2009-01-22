@@ -66,10 +66,6 @@ fetch_flags_re = re.compile(r'^\((.*?)\) ?')
 fetch_int_re = re.compile(r'^(\d+) ?')
 fetch_quoted_re = re.compile(r'^"(.*?)" ?')
 map_crlf_re = re.compile(r'\r\n|\r|\n')
-mailbox_list_re = re.compile( r'\((?P<attributes>.*?)\)' + SP + \
-                              r'(?P<hierarchy_delimiter>"."|NIL)' + SP + \
-                              r'"(?P<name>.*?)"' )
-
 
 class IMAP4P:
     '''
@@ -333,16 +329,16 @@ class IMAP4P:
         self.sstatus['current_folder'][code.upper()] =  args 
         
     def LIST_response(self, code, args):
-        resp = mailbox_list_re.match(args)
-        
-        if not resp:
+        resp = scan_sexp( args )
+
+        try:
+            attributes =  resp[0]
+            hierarchy_delimiter = resp[1]
+            name = resp[2]
+        except:
             raise self.Error('Don\'t know how to parse the LIST response: %s' %\
                 args )
-        
-        attributes =  tuple(resp.group('attributes').split())
-        hierarchy_delimiter = resp.group('hierarchy_delimiter')
-        name = resp.group('name')
-        
+ 
         # If the hierarchy_delimiter is NIL no hierarchy exists
         if hierarchy_delimiter != 'NIL':
             hierarchy_delimiter = unquote(hierarchy_delimiter)
