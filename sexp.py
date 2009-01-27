@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# imaplib2 python module, meant to be a replacement to the python default 
+# imaplib2 python module, meant to be a replacement to the python default
 # imaplib module
 # Copyright (C) 2008 Helder Guerreiro
 
@@ -22,9 +22,7 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-22 22:45:55 +0100 (Tue, 22 Apr 2008) $
-# $LastChangedRevision: 327 $
-# $LastChangedBy: helder $
+# $Id: sexp.py 364 2008-06-16 11:46:37Z helder $
 #
 
 # Global imports

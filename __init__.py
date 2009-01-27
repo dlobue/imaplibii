@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# imaplib2 python module, meant to be a replacement to the python default 
+# imaplib2 python module, meant to be a replacement to the python default
 # imaplib module
 # Copyright (C) 2008 Helder Guerreiro
 
@@ -22,10 +22,8 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-22 22:45:55 +0100 (Tue, 22 Apr 2008) $
-# $LastChangedRevision: 327 $
-# $LastChangedBy: helder $
-# 
+# $Id: __init__.py 364 2008-06-16 11:46:37Z helder $
+#
 
 '''Replacement for the standard python module imaplib.
 
@@ -34,7 +32,7 @@ programs based on 'imaplib' to this library.
 
 The package contents are:
 
-* imapll - low level imap library, it makes no attempt to parse the server 
+* imapll - low level imap library, it makes no attempt to parse the server
 responses;
 * imapp - parsed imap library;
 * parsefetch - parses the fetch command responses;

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# imaplib2 python module, meant to be a replacement to the python default 
+# imaplib2 python module, meant to be a replacement to the python default
 # imaplib module
 # Copyright (C) 2008 Helder Guerreiro
 
@@ -22,10 +22,8 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-09 21:26:21 +0100 (Wed, 09 Apr 2008) $
-# $LastChangedRevision: 301 $
-# $LastChangedBy: helder $
-# 
+# $Id: imapcommands.py 386 2008-07-18 15:24:36Z helder $
+#
 
 '''IMAP command list and their allowed states'''
 
@@ -62,6 +60,7 @@ COMMANDS = {
         'RENAME':       ('AUTH', 'SELECTED'),
         'SEARCH':       ('SELECTED',),
         'SELECT':       ('AUTH', 'SELECTED'),
+        'UNSELECT':     ('SELECTED',),
         'SETACL':       ('AUTH', 'SELECTED'),
         'SETANNOTATION':('AUTH', 'SELECTED'),
         'SETQUOTA':     ('AUTH', 'SELECTED'),
@@ -73,23 +72,23 @@ COMMANDS = {
         'UID':          ('SELECTED',),
         'UNSUBSCRIBE':  ('AUTH', 'SELECTED'),
         }
-   
+
 # Addicional status messages returned on the tagged or untagged responses:
 # 'OK','NO','BAD', 'PREAUTH', 'BYE'
-STATUS = ('ALERT', 
-          'BADCHARSET', 
-          'CAPABILITY', 
-          'PARSE', 
-          'PERMANENTFLAGS', 
-          'READ-ONLY', 
+STATUS = ('ALERT',
+          'BADCHARSET',
+          'CAPABILITY',
+          'PARSE',
+          'PERMANENTFLAGS',
+          'READ-ONLY',
           'READ-WRITE',
           'TRYCREATE',
           'UIDNEXT',
           'UIDVALIDITY',
           'UNSEEN',
 #          'APPENDUID', # RFC 2359 - IMAP4 UIDPLUS extension
-         ) 
-         
+         )
+
 # Fetch responses
 FETCHRESP = ('BODY',
              'BODY\[(?P<section>.*?)\]<(?P<origin>\d*)>',

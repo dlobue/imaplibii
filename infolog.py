@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# imaplib2 python module, meant to be a replacement to the python default 
+# imaplib2 python module, meant to be a replacement to the python default
 # imaplib module
 # Copyright (C) 2008 Helder Guerreiro
 
@@ -22,76 +22,74 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-09 21:26:21 +0100 (Wed, 09 Apr 2008) $
-# $LastChangedRevision: 301 $
-# $LastChangedBy: helder $
-# 
+# $Id: infolog.py 364 2008-06-16 11:46:37Z helder $
+#
 
 '''This module provides a single class that is used to register status responses
-from the server. 
+from the server.
 '''
 
 class InfoLog(list):
     '''Collects and manages the information and warnings issued by the server in
     the form of status responses.
-    
-    This can be overriden or completly replaced provided that the interface 
+
+    This can be overriden or completly replaced provided that the interface
     stays the same.
-    
-    By default it stores the last 10 entries, this can be defined while 
+
+    By default it stores the last 10 entries, this can be defined while
     creating the instance.
     '''
     def __init__(self, max_entries = 10, *args ):
         '''Creates a new InfoLog list.
-        
+
         @param max_entries: number of entries to keep
         @type max_entries: integer
         '''
         self.max_entries = max_entries
         self.action_list = []
-        
+
         list.__init__(self, *args)
-        
+
     def addEntry( self, type, data ):
         '''Adds a new log entry.
-        
+
         @param type: the type of the entry (warning, error, info, etc)
         @type  type: string
-        
+
         @param data: any python object.
         '''
         type = type.upper()
         if len(self) == self.max_entries:
             del self[0]
         self.append({'type':type, 'data':data })
-        
+
         for action in self.action_list:
             if action['type'] == type:
                 action['action'](type, data)
-        
+
     def addAction( self, type, action ):
         '''A callback action can be defined. Every time a new log is made
-        the callback action will be executed. 
-        
+        the callback action will be executed.
+
         @param type: the type that will trigger the action
-        @param action: a python callable, the arguments used will be 
+        @param action: a python callable, the arguments used will be
         (type, data).
         '''
         self.action_list.append( { 'type': type, 'action': action } )
-        
-        
+
+
 if __name__ == '__main__':
     a = InfoLog()
-    
+
     def printAA( type, data ):
         print 'Type: ', type
         print 'Data: :', data
-    
+
     a.addAction( 'AA', printAA )
     for i in range(20):
         a.addEntry( 'AA','AAAAA %d' % i )
-        
+
     print a
-    
+
     for i in a:
         print i['data']

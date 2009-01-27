@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# imaplib2 python module, meant to be a replacement to the python default 
+# imaplib2 python module, meant to be a replacement to the python default
 # imaplib module
 # Copyright (C) 2008 Helder Guerreiro
 
@@ -22,10 +22,8 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-18 17:08:14 +0100 (Fri, 18 Apr 2008) $
-# $LastChangedRevision: 323 $
-# $LastChangedBy: helder $
-# 
+# $Id: imapll_example.py 364 2008-06-16 11:46:37Z helder $
+#
 
 '''Example usage of imaplib2.imapll
 '''
@@ -36,12 +34,12 @@ imaplib2.imapll.Debug = 3
 
 if __name__ == '__main__':
     import getopt, getpass, sys, pprint
-    
+
     try:
         optlist, args = getopt.getopt(sys.argv[1:], 'd:s:')
     except getopt.error, val:
         optlist, args = (), ()
-        
+
     if not args: args = ('',)
 
     host = args[0]
@@ -50,10 +48,10 @@ if __name__ == '__main__':
     PASSWD = getpass.getpass("IMAP password for %s on %s: " % (USER, host or "localhost"))
 
     M = imaplib2.imapll.IMAP4( host )
-    
+
     pprint.pprint(M.send_command('LOGIN %s "%s"' % (USER, PASSWD)))
-    
+
     pprint.pprint(M.send_command('LIST "INBOX" "*"'))
-    
+
     pprint.pprint(M.send_command('LOGOUT' ))
 

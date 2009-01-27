@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# imaplib2 python module, meant to be a replacement to the python default 
+# imaplib2 python module, meant to be a replacement to the python default
 # imaplib module
 # Copyright (C) 2008 Helder Guerreiro
 
@@ -22,9 +22,7 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-14 15:56:03 +0100 (Mon, 14 Apr 2008) $
-# $LastChangedRevision: 310 $
-# $LastChangedBy: helder $
+# $Id: parsefetch.py 364 2008-06-16 11:46:37Z helder $
 #
 
 '''Parse the fetch responses.
@@ -41,13 +39,13 @@ class BODYERROR(Exception) : pass
 class BodyPart:
     def __init__( self, structure, prefix, level, next, parent = None ):
         self.parent = parent
-    
+
     def query(self):
         raise BODYERROR('This part is not numbered')
-    
+
     def load_parts( self, structure, prefix ):
         raise BODYERROR('This part is not numbered')
-        
+
     def fetch_query(self):
         '''Fetch query to retrieve this part'''
         raise BODYERROR('This part is not numbered')
@@ -57,48 +55,48 @@ class BodyPart:
         informational pourposes.
         '''
         raise BODYERROR('Abstract method')
-        
+
     # Methods to facilitate displaying the message:
-    
+
     def serial_message(self):
         '''Returns the message structure as a one dimension list'''
         return [self]
-        
+
     def find_part(self, part_number ):
         '''Returns a part'''
         for part in self.serial_message():
             if part.part_number == part_number:
                 return part
         raise BODYERROR('Didn\'t find the requested part (%s).' % part_number)
-        
+
     def is_text(self):
         '''Only true for media='TEXT' media_subtype='PLAIN' or 'HTML' '''
         return False
-        
+
     def is_basic(self):
         '''Only true for media!='TEXT' '''
         return False
-        
+
     def is_multipart(self):
         '''Only true for media='MULTIPART'  '''
         return False
-        
+
     def test_media(self, media ):
         return self.media == media.upper()
-        
+
     def test_subtype(self, media_subtype):
         return self.media_subtype == media_subtype.upper()
-        
+
     def test_plain(self):
         return self.test_subtype('PLAIN')
-        
+
     def test_html(self):
         return self.test_subtype('HTML')
-    
+
     def is_encapsulated(self):
         '''Only valid for encapsulated messages'''
         return False
-    
+
     def is_attachment(self):
         '''Only valid for single parts that are attachments'''
         return self.is_basic()
@@ -106,14 +104,14 @@ class BodyPart:
 class Multipart ( BodyPart ):
     def __init__( self, structure, prefix, level, next, parent = None  ):
         BodyPart.__init__( self, structure, prefix, level, next, parent )
-        
+
         if next: # has part number
             self.part_number = '%s%d' % (prefix, level)
             prefix = '%s%d.' % ( prefix, level )
         else:
             next = True
             self.part_number = None
-            
+
         self.media = 'MULTIPART'
         self.part_list = []
         self.body_ext_mpart = []
@@ -126,7 +124,7 @@ class Multipart ( BodyPart ):
             if is_subpart:
                 if isinstance( part, list ):
                     # We have one more subpart
-                    self.part_list.append( load_structure( part, prefix, level, 
+                    self.part_list.append( load_structure( part, prefix, level,
                         next, self))
                     level += 1
                 else:
@@ -161,14 +159,14 @@ class Multipart ( BodyPart ):
                 tmp_query.append(query)
 
         return ' '.join(tmp_query)
-        
+
     def serial_message(self):
         tmp_partlist = [self]
         for part in self.part_list:
             tmp_partlist += part.serial_message()
-            
+
         return tmp_partlist
-        
+
     def is_multipart(self):
         '''Only true for media='MULTIPART'  '''
         return True
@@ -193,13 +191,13 @@ class Single ( BodyPart ):
                     self.body_fld_param[name] = value
 
         self.part_number = '%s%d' % (prefix, level)
-        
+
     def charset(self):
         if self.body_fld_param.has_key('CHARSET'):
             return self.body_fld_param['CHARSET']
         else:
             return 'iso-8859-1'
-            
+
     def filename(self):
         # TODO: first look for the name on the Content-Disposition header
         # and only after this one should look on the Contant-Type Name parameter
@@ -232,7 +230,7 @@ class Message( Single ):
 
         if len(structure)>10:
             self.body_ext_1part = structure[10:]
-            
+
         self.start = True
 
     def represent(self):
@@ -242,15 +240,15 @@ class Message( Single ):
 
     def fetch_query(self, media, media_subtype):
         return self.body.fetch_query(media, media_subtype)
-        
+
     def serial_message(self):
         return [self] + self.body.serial_message() + [self]
-        
+
     def is_encapsulated(self):
         return True
-        
+
     def is_start(self):
-        tmp = self.start 
+        tmp = self.start
         self.start = not self.start
         return tmp
 
@@ -272,7 +270,7 @@ class SingleTextBasic ( Single ):
             return self.query()
         else:
             return None
-    
+
 class SingleText ( SingleTextBasic ):
     def __init__(self, structure, prefix, level, next, parent = None):
         SingleTextBasic.__init__(self, structure, prefix, level, next, parent )
@@ -282,7 +280,7 @@ class SingleText ( SingleTextBasic ):
             self.body_ext_1part = structure[8:]
         else:
             self.body_ext_1part = None
-            
+
     def is_text(self):
         return True
 
@@ -294,7 +292,7 @@ class SingleBasic ( SingleTextBasic ):
             self.body_ext_1part = structure[7:]
         else:
             self.body_ext_1part = None
-                    
+
     def is_basic(self):
         '''Only true for media!='TEXT' '''
         return True
@@ -314,7 +312,7 @@ def load_structure(structure, prefix = '',level = 1,next = False,parent = None):
         return SingleText( structure, prefix, level, next, parent )
 
     return SingleBasic( structure, prefix, level, next, parent )
-    
+
 def envelope( structure ):
     return { 'env_date': envelopedate2datetime(structure[0]),
             'env_subject': getUnicodeHeader(structure[1]),
@@ -326,7 +324,7 @@ def envelope( structure ):
             'env_bcc': getUnicodeMailAddr(structure[7]),
             'env_in_reply_to': structure[8],
             'env_message_id': structure[9]  }
-    
+
 def real_name( address ):
     '''From an address returns the person real name or if this is empty the
     email address'''
@@ -334,19 +332,19 @@ def real_name( address ):
         return address[0]
     else:
         return address[1]
-    
+
 class Envelope( dict ):
     def __init__( self, env ):
         dict.__init__(self, envelope( env ) )
-        
+
     def short_mail_list(self, mail_list):
         for addr in mail_list:
             yield real_name(addr)
-            
+
     def to_short(self):
         '''Returns a list with the first and last names'''
         return self.short_mail_list(self['env_to'])
-        
+
     def from_short(self):
         '''Returns a list with the first and last names'''
         return self.short_mail_list(self['env_from'])
@@ -509,7 +507,7 @@ def body_parts( structure ):
         part['body_ext_1part'] = structure
 
     return part
-    
+
 def calc_part_numbers( body, prefix = '', level = 1, next = False ):
     if body['media'] == 'MULTIPART':
         if next: # has part number
@@ -517,7 +515,7 @@ def calc_part_numbers( body, prefix = '', level = 1, next = False ):
             prefix = '%s%d.' % ( prefix, level )
         else:
             next = True
-            
+
         for part in body['part_list']:
             calc_part_numbers(part, prefix, level, next)
             level += 1
@@ -528,7 +526,7 @@ def calc_part_numbers( body, prefix = '', level = 1, next = False ):
             if body['body']['media'] == 'MULTIPART':
                 next = False
             calc_part_numbers(body['body'], prefix, 1, next)
-        
+
     return body
 
 def walk( body ):
@@ -547,14 +545,14 @@ def walk( body ):
                 yield p
         else:
             yield body
-            
+
 def represent_body( structure ):
     print 'Recursive'
     body = calc_part_numbers( body_parts ( structure ) )
     for part in walk(body):
         if part.has_key('part_number'):
-            print '%-10s %s/%s' % ( part['part_number'], part['media'], 
+            print '%-10s %s/%s' % ( part['part_number'], part['media'],
                 part['media_subtype'] )
         else:
-            print '%-10s %s/%s' % ( 'None', part['media'], 
+            print '%-10s %s/%s' % ( 'None', part['media'],
                 part['media_subtype'] )
