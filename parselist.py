@@ -22,7 +22,7 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $Id: parselist.py 380 2008-07-05 00:44:42Z helder $
+# $Id$
 #
 
 # Imports

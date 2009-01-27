@@ -22,7 +22,7 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $Id: imapp.py 443 2009-01-21 00:40:08Z helder $
+# $Id$
 #
 
 '''This is an IMAP parsed library. The final objective is to have a

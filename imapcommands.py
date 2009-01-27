@@ -22,7 +22,7 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $Id: imapcommands.py 386 2008-07-18 15:24:36Z helder $
+# $Id$
 #
 
 '''IMAP command list and their allowed states'''

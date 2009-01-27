@@ -22,7 +22,7 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $Id: sexp.py 364 2008-06-16 11:46:37Z helder $
+# $Id$
 #
 
 # Global imports

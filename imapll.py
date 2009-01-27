@@ -22,7 +22,7 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $Id: imapll.py 364 2008-06-16 11:46:37Z helder $
+# $Id$
 #
 
 '''This is an IMAP low level module, it provides the basic mechanisms

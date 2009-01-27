@@ -22,7 +22,7 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $Id: infolog.py 364 2008-06-16 11:46:37Z helder $
+# $Id$
 #
 
 '''This module provides a single class that is used to register status responses
