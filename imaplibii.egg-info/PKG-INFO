@@ -1,0 +1,11 @@
+Metadata-Version: 1.0
+Name: imaplibii
+Version: 0.1dev
+Summary: Low-level IMAP client library
+Home-page: http://code.google.com/p/webpymail/
+Author: Helder Guerreiro
+Author-email: hguerreiro@gmail.com
+License: GNU General Public License v3
+Description: long_desc _morelater_
+Keywords: imap library
+Platform: UNKNOWN

@@ -1,0 +1,9 @@
+setup.cfg
+setup.py
+imaplibii/__init__.py
+imaplibii.egg-info/PKG-INFO
+imaplibii.egg-info/SOURCES.txt
+imaplibii.egg-info/dependency_links.txt
+imaplibii.egg-info/entry_points.txt
+imaplibii.egg-info/top_level.txt
+imaplibii.egg-info/zip-safe
