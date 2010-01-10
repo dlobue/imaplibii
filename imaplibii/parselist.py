@@ -35,7 +35,7 @@ NOSELECT = r'\Noselect'
 HASCHILDREN = r'\HasChildren'
 HASNOCHILDREN = r'\HasNoChildren'
 
-class Mailbox:
+class Mailbox(object):
     def __init__(self, path, attributes, delimiter):
         self.path = path
         self.delimiter = delimiter

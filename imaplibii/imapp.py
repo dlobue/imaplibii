@@ -37,6 +37,8 @@ appropriate data which will be return at the command end.
 # Global imports
 import re
 import socket
+import select
+from threading import Timer
 
 # Local imports
 from imapll import IMAP4, IMAP4_SSL
@@ -68,7 +70,7 @@ fetch_int_re = re.compile(r'^(\d+) ?')
 fetch_quoted_re = re.compile(r'^"(.*?)" ?')
 map_crlf_re = re.compile(r'\r\n|\r|\n')
 
-class IMAP4P:
+class IMAP4P(object):
     '''
     This class implements an IMAP client.
 
@@ -574,6 +576,14 @@ class IMAP4P:
 
         return self.processCommand( name, '"%s"' % mailbox )
 
+    def done(self):
+        '''
+        Notify the server to come out of IDLE mode.
+        '''
+        name = 'DONE'
+        
+        return self.send('%s%s' % (name, CRLF))
+
     def deleteacl(self, mailbox, identifier):
         '''The DELETEACL command removes any <identifier,rights> pair for the
         specified identifier from the access control list for the specified
@@ -679,6 +689,19 @@ class IMAP4P:
                                         'acl': {} }
 
         return self.processCommand( name, '"%s"' % mailbox )['acl_response']
+
+    def idle(self):
+        '''
+        Initiate IDLE mode with the server for instant notification of new mail.
+        '''
+        name = 'IDLE'
+        self.state = 'IDLE' # FIXME: state should be set to idle only AFTER
+                            # idle has been successfully activated.
+
+        cmd_ret_stat = self.processCommand(name)
+        
+        final_resp = self.send_command(name, )
+        return
 
     def list(self, directory='', pattern='*'):
         '''List mailbox names in directory matching pattern.
@@ -1103,6 +1126,48 @@ class IMAP4P:
             return self.thread_uid(thread_alg, charset, search_criteria)
         else:
             return self.thread(thread_alg, charset, search_criteria)
+
+    def _read_resp_loop(self, loop_cond_chk, response, yield_dispatch = None):
+        '''
+        Modified read_responses loop meant for IDLE.
+        '''
+        poll = select.poll()
+        poll.register(self.file.fileno(), select.POLLIN)
+        data_release = None
+        if not yield_dispatch:
+            def my_prt(x):
+                print '\t%s\n\n\n' % x
+            yield_dispatch = my_prt
+            #yield_dispatch = lambda x: x
+
+        while loop_cond_chk:
+            # If we have responses to read we should get them
+            # from the server up until there are no more responses
+            r = poll.poll()
+            if not r: continue
+
+            # This little gem is necessary for Exchange.
+            # Unlike sane imap servers like Gmail, when something
+            # is done to cause an IDLE notification to go off
+            # Exchange isn't satisified with sending out just one
+            # message, no! It has to send out 5 :(
+            if data_release is None:
+                resp_buffer = {}
+                resp_buffer.update(response)
+            elif data_release.is_alive():
+                data_release.cancel()
+            else:
+                resp_buffer = {}
+                resp_buffer.update(response)
+
+            resp = self._get_response()
+            resp_buffer = self._build_read_resp(resp, resp_buffer)
+
+            data_release = Timer(1, yield_dispatch, resp_buffer)
+            data_release.start()
+
+        response = resp_buffer
+        return response
 
 if __name__ == '__main__':
     import getopt, getpass, sys

@@ -36,7 +36,7 @@ from sexp import scan_sexp
 
 class BODYERROR(Exception) : pass
 
-class BodyPart:
+class BodyPart(object):
     def __init__( self, structure, prefix, level, next, parent = None ):
         self.parent = parent
 

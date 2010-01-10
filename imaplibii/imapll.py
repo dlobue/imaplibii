@@ -36,6 +36,9 @@ standard python IMAP client module) by Piers Lauder.
 
 # Global imports
 import socket, random, re
+import select
+from threading import Timer
+from weakref import ref
 
 # Local imports
 from imapcommands import COMMANDS
@@ -59,7 +62,7 @@ CRLF = '\r\n'
 literal_re = re.compile('.*{(?P<size>\d+)}$')
 send_literal_re = re.compile('.*{(?P<size>\d+)}\r\n')
 
-class IMAP4:
+class IMAP4(object):
     '''Bare bones IMAP client.
 
     This class implements a very simple IMAP client, all it does is to send
@@ -269,6 +272,107 @@ class IMAP4:
         else:
             return tag
 
+    '''
+    def _read_poll(self):
+        import select
+        import threading
+        from weakref import ref
+
+        else:
+            loop_chk = self.tagged_commands
+
+        poll = select.poll()
+        poll.register(self.file.fileno(), select.POLLIN)
+        data_go = None
+
+        while loop_chk:
+            r = poll.poll()
+            if not r: continue
+
+            if data_go is None:
+                resp_buffer = {}
+                pass
+            elif data_go.is_alive():
+                data_go.cancel()
+            else:
+                resp_buffer = {}
+
+            line = self._get_line()
+            resp_buffer.update(line)
+            data_go = threading.Timer(1, data_parse_n_notify, resp_buffer)
+            data_go.start()
+
+        '''
+
+
+    def _read_resp_loop(self, loop_cond_chk, response, yield_dispatch = None):
+        '''
+        Modified read_responses loop meant for IDLE.
+        '''
+        poll = select.poll()
+        poll.register(self.sock.fileno(), select.POLLIN)
+        data_release = None
+        if not yield_dispatch:
+            def my_prt(x):
+                print 'idle notification:\t%s\n\n\n' % str(x)
+            yield_dispatch = my_prt
+
+        while loop_cond_chk:
+            # If we have responses to read we should get them
+            # from the server up until there are no more responses
+            #r = poll.poll(1)
+            #if not r: continue
+            resp = self._get_response()
+
+            # This little gem is necessary for Exchange.
+            # Unlike sane imap servers like Gmail, when something
+            # is done to cause an IDLE notification to go off
+            # Exchange isn't satisified with sending out just one
+            # message, no! It has to send out 5 :(
+            if data_release is None:
+                resp_buffer = { 'tagged' : {},
+                                'untagged' : [] }
+            elif data_release.is_alive():
+                data_release.cancel()
+            else:
+                resp_buffer = { 'tagged' : {},
+                                'untagged' : [] }
+
+            resp_buffer = self._build_read_resp(resp, resp_buffer)
+
+            if self.state == 'IDLE':
+                data_release = Timer(1, yield_dispatch, (resp_buffer,))
+                data_release.start()
+
+        response = resp_buffer
+        return response
+
+
+    def _read_resp_loop1(self, loop_cond_chk, response):
+        '''
+        Generic read_responses loop.
+        '''
+        while loop_cond_chk:
+            # If we have responses to read we should get them
+            # from the server up until there are no more responses
+            resp = self._get_response()
+            response = self._build_read_resp(resp, response)
+
+        return response
+
+    def _build_read_resp(self, resp, response):
+        if isinstance(resp,str):
+            response['untagged'].append(resp)
+        elif isinstance(resp,dict):
+            # A tagged response is dict formated
+            response['tagged'][resp['tag']] = resp
+        elif resp == None:
+            # We've sent a continuation
+            pass
+        else:
+            raise self.Error('Unknown response:\n%s' % resp)
+        return response
+
     def read_responses(self, tag):
         '''
         Reads the responses from the server.
@@ -301,21 +405,19 @@ class IMAP4:
         response = { 'tagged' : {},
                      'untagged' : [] }
 
-        while self.tagged_commands:
-            # If we have responses to read we should get them
-            # from the server up until there are no more responses
-            resp = self._get_response()
+        if self.state == 'IDLE':
+            class idle_chk(object):
+                def __init__(self, parent):
+                    self.parent = ref(parent)
+                def __nonzero__(self):
+                    if self.parent().state == 'IDLE':
+                        return True
+                    return False
+            loop_cond_chk = idle_chk(self)
+        else:
+            loop_cond_chk = self.tagged_commands
 
-            if isinstance(resp,str):
-                response['untagged'].append(resp)
-            elif isinstance(resp,dict):
-                # A tagged response is dict formated
-                response['tagged'][resp['tag']] = resp
-            elif resp == None:
-                # We've sent a continuation
-                pass
-            else:
-                raise self.Error('Unknown response:\n%s' % resp)
+        response = self._read_resp_loop(loop_cond_chk, response)
 
         self.continuation_data.clear()
 
@@ -390,7 +492,7 @@ class IMAP4:
             # It's tagged
             tag = tg.group('tag')
             if not tag in self.tagged_commands:
-                raise self.Abort('unexpected tagged response: %s' % resp)
+                raise self.Abort('unexpected tagged response: %s' % line)
             type = tg.group('type')
             data = tg.group('data')
             response = { 'status': type, 'message': data,
@@ -398,6 +500,8 @@ class IMAP4:
                          'command': self.tagged_commands[tag] }
             del self.tagged_commands[tag]
             return response
+        elif self.state == 'IDLE':
+            return line
         elif line[:2] == '* ':
             # It's untagged
             return line

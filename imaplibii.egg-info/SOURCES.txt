@@ -1,6 +1,14 @@
 setup.cfg
 setup.py
 imaplibii/__init__.py
+imaplibii/imapcommands.py
+imaplibii/imapll.py
+imaplibii/imapp.py
+imaplibii/infolog.py
+imaplibii/parsefetch.py
+imaplibii/parselist.py
+imaplibii/sexp.py
+imaplibii/utils.py
 imaplibii.egg-info/PKG-INFO
 imaplibii.egg-info/SOURCES.txt
 imaplibii.egg-info/dependency_links.txt
