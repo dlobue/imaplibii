@@ -36,13 +36,11 @@ standard python IMAP client module) by Piers Lauder.
 
 # Global imports
 import socket, random, re
-import select
 from threading import Timer
-from weakref import ref
+import pprint
 
 # Local imports
-from imapcommands import COMMANDS
-from utils import Int2AP, makeTagged, ContinuationRequests
+from utils import Int2AP, ContinuationRequests
 
 # Constants
 
@@ -154,6 +152,14 @@ class IMAP4(object):
             self.state = 'NONAUTH'
         else:
             raise self.Error(self.welcome)
+
+    '''
+    def _get_state(self):
+        return self.__state
+    def _set_state(self, new_state):
+        self.__state = new_state
+    state = property(_get_state, _set_state)
+    '''
 
     ##
     # Overridable methods
@@ -272,56 +278,17 @@ class IMAP4(object):
         else:
             return tag
 
-    '''
-    def _read_poll(self):
-        import select
-        import threading
-        from weakref import ref
-
-        else:
-            loop_chk = self.tagged_commands
-
-        poll = select.poll()
-        poll.register(self.file.fileno(), select.POLLIN)
-        data_go = None
-
-        while loop_chk:
-            r = poll.poll()
-            if not r: continue
-
-            if data_go is None:
-                resp_buffer = {}
-                pass
-            elif data_go.is_alive():
-                data_go.cancel()
-            else:
-                resp_buffer = {}
-
-            line = self._get_line()
-            resp_buffer.update(line)
-            data_go = threading.Timer(1, data_parse_n_notify, resp_buffer)
-            data_go.start()
-
-        '''
-
-
-    def _read_resp_loop(self, loop_cond_chk, response, yield_dispatch = None):
+    def _read_resp_loop(self, response):
         '''
         Modified read_responses loop meant for IDLE.
         '''
-        poll = select.poll()
-        poll.register(self.sock.fileno(), select.POLLIN)
         data_release = None
-        if not yield_dispatch:
-            def my_prt(x):
-                print 'idle notification:\t%s\n\n\n' % str(x)
-            yield_dispatch = my_prt
+        resp_buffer = { 'tagged' : {},
+                        'untagged' : [] }
 
-        while loop_cond_chk:
+        while self.tagged_commands:
             # If we have responses to read we should get them
             # from the server up until there are no more responses
-            #r = poll.poll(1)
-            #if not r: continue
             resp = self._get_response()
 
             # This little gem is necessary for Exchange.
@@ -329,24 +296,32 @@ class IMAP4(object):
             # is done to cause an IDLE notification to go off
             # Exchange isn't satisified with sending out just one
             # message, no! It has to send out 5 :(
-            if data_release is None:
-                resp_buffer = { 'tagged' : {},
-                                'untagged' : [] }
-            elif data_release.is_alive():
-                data_release.cancel()
-            else:
-                resp_buffer = { 'tagged' : {},
-                                'untagged' : [] }
+            if self.state == 'IDLE':
+                try: data_release.cancel()
+                except AttributeError:
+                    pass #quack!
 
             resp_buffer = self._build_read_resp(resp, resp_buffer)
 
             if self.state == 'IDLE':
-                data_release = Timer(1, yield_dispatch, (resp_buffer,))
+                data_release = Timer(3, self._idle_dispatch, (resp_buffer,))
+                            #TODO: may be interesting to do heuristics one day
+                            # on the timer value so it can change to suit its env.
                 data_release.start()
 
         response = resp_buffer
         return response
 
+    def _idle_dispatch(self, response):
+        try:
+            return self.idle_dispatch(response)
+        finally:
+            response['tagged'].clear()
+            del response['untagged'][:]
+
+    def idle_dispatch(self, response):
+        print 'Not implemented!'
+        print '(got %s response tho, btw)' % str(response)
 
     def _read_resp_loop1(self, loop_cond_chk, response):
         '''
@@ -405,20 +380,10 @@ class IMAP4(object):
         response = { 'tagged' : {},
                      'untagged' : [] }
 
-        if self.state == 'IDLE':
-            class idle_chk(object):
-                def __init__(self, parent):
-                    self.parent = ref(parent)
-                def __nonzero__(self):
-                    if self.parent().state == 'IDLE':
-                        return True
-                    return False
-            loop_cond_chk = idle_chk(self)
-        else:
-            loop_cond_chk = self.tagged_commands
+        response = self._read_resp_loop(response)
 
-        response = self._read_resp_loop(loop_cond_chk, response)
-
+        if self.continuation_data:
+            pprint.pprint(self.continuation_data)
         self.continuation_data.clear()
 
         if __debug__:

@@ -42,6 +42,7 @@ from threading import Timer
 
 # Local imports
 from imapll import IMAP4, IMAP4_SSL
+import imapll
 from infolog import InfoLog
 from imapcommands import COMMANDS, STATUS
 from utils import makeTagged, unquote, Internaldate2tuple, shrink_fetch_list
@@ -146,6 +147,17 @@ class IMAP4P(object):
             infolog = InfoLog(MAXLOG),
             autologout = True ):
 
+        # First initialize all vars
+        # Server status
+        self.sstatus = {}
+
+        # Status messages from the server
+        self.infolog = infolog
+
+        self.capabilities = []
+        self.as_uid = None
+        self.as_sort = None
+
         # Choose the right connection, and then connect to the server
         self.autologout = autologout
         if not port:
@@ -170,19 +182,20 @@ class IMAP4P(object):
 
         # Wrap IMAP4
         self.welcome = self.__IMAP4.welcome
-        self.send_command = self.__IMAP4.send_command
-        self.state = self.__IMAP4.state
+        #self.send_command = self.__IMAP4.send_command
+        #self.state = self.__IMAP4.state
 
-        # Server status
-        self.sstatus = {}
-
-        # Status messages from the server
-        self.infolog = infolog
         self.infolog.addEntry('WELCOME', self.welcome)
 
-        self.capabilities = []
-        self.as_uid = None
-        self.as_sort = None
+
+    def _get_state(self):
+        return self.__IMAP4.state
+    def _set_state(self, new_state):
+        self.__IMAP4.state = new_state
+    state = property(_get_state, _set_state)
+
+    def __getattr__(self, name):
+        return getattr(self.__IMAP4, name)
 
     def __del__(self):
         if __debug__:
@@ -319,6 +332,8 @@ class IMAP4P(object):
 
     def CAPABILITY_response(self, code, args):
         self.sstatus['capability'] = tuple( args.upper().split() )
+        if not self.capabilities:
+            self.capabilities = self.sstatus['capability']
 
     def EXISTS_response(self, code, args):
         self.sstatus['current_folder']['EXISTS'] = int(args)
@@ -581,8 +596,8 @@ class IMAP4P(object):
         Notify the server to come out of IDLE mode.
         '''
         name = 'DONE'
-        
-        return self.send('%s%s' % (name, CRLF))
+        self.send('%s%s' % (name, CRLF))
+        self.state = 'SELECTED'
 
     def deleteacl(self, mailbox, identifier):
         '''The DELETEACL command removes any <identifier,rights> pair for the
@@ -695,13 +710,16 @@ class IMAP4P(object):
         Initiate IDLE mode with the server for instant notification of new mail.
         '''
         name = 'IDLE'
-        self.state = 'IDLE' # FIXME: state should be set to idle only AFTER
-                            # idle has been successfully activated.
-
-        cmd_ret_stat = self.processCommand(name)
-        
-        final_resp = self.send_command(name, )
-        return
+        if not self.has_capability(name):
+            raise self.Abort('Server does not support the IDLE extension')
+        tag = self.send_command(name, read_resp = False)
+        response = self._get_line()
+        if 'accepted, awaiting DONE command' in response or 'idling' in response:
+            self.state = 'IDLE'
+            final_response = self.read_responses(tag)
+            return final_response
+        else:
+            raise self.Abort('failed to initiate IDLE!')
 
     def list(self, directory='', pattern='*'):
         '''List mailbox names in directory matching pattern.
@@ -1126,48 +1144,6 @@ class IMAP4P(object):
             return self.thread_uid(thread_alg, charset, search_criteria)
         else:
             return self.thread(thread_alg, charset, search_criteria)
-
-    def _read_resp_loop(self, loop_cond_chk, response, yield_dispatch = None):
-        '''
-        Modified read_responses loop meant for IDLE.
-        '''
-        poll = select.poll()
-        poll.register(self.file.fileno(), select.POLLIN)
-        data_release = None
-        if not yield_dispatch:
-            def my_prt(x):
-                print '\t%s\n\n\n' % x
-            yield_dispatch = my_prt
-            #yield_dispatch = lambda x: x
-
-        while loop_cond_chk:
-            # If we have responses to read we should get them
-            # from the server up until there are no more responses
-            r = poll.poll()
-            if not r: continue
-
-            # This little gem is necessary for Exchange.
-            # Unlike sane imap servers like Gmail, when something
-            # is done to cause an IDLE notification to go off
-            # Exchange isn't satisified with sending out just one
-            # message, no! It has to send out 5 :(
-            if data_release is None:
-                resp_buffer = {}
-                resp_buffer.update(response)
-            elif data_release.is_alive():
-                data_release.cancel()
-            else:
-                resp_buffer = {}
-                resp_buffer.update(response)
-
-            resp = self._get_response()
-            resp_buffer = self._build_read_resp(resp, resp_buffer)
-
-            data_release = Timer(1, yield_dispatch, resp_buffer)
-            data_release.start()
-
-        response = resp_buffer
-        return response
 
 if __name__ == '__main__':
     import getopt, getpass, sys
