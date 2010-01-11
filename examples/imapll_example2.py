@@ -28,12 +28,12 @@
 '''Example usage of imaplib2.imapll
 '''
 
-import imaplibii.imapp
+import imaplibii.imapll
 
 from threading import Timer
 import time
 
-imaplibii.imapp.imapll.Debug = 3
+imaplibii.imapll.Debug = 3
 
 if __name__ == '__main__':
     import getopt, getpass, sys, pprint
@@ -52,28 +52,26 @@ if __name__ == '__main__':
     PASSWD = getpass.getpass("IMAP password for %s on %s: " % (USER, host or "localhost"))
 
     t = time.time()
-    M = imaplibii.imapp.IMAP4P( host, ssl = True)
+    M = imaplibii.imapll.IMAP4_SSL( host )
 
     def do_done():
         print 'trying do_done'
-        pprint.pprint(M.done())
-        #M.state = 'SELECTED'
+        pprint.pprint(M.send('%s%s' % ('DONE', imaplibii.imapll.CRLF)))
+        M.state = 'SELECTED'
 
-    pprint.pprint(M.login(USER, PASSWD))
+    pprint.pprint(M.send_command('LOGIN %s "%s"' % (USER, PASSWD)))
 
-    pprint.pprint(M.list('INBOX'))
-    pprint.pprint(M.select('INBOX'))
-
-    pprint.pprint( M.capabilities)
+    pprint.pprint(M.send_command('LIST "INBOX" "*"'))
+    pprint.pprint(M.send_command('SELECT "INBOX"'))
 
     mt = Timer(60, do_done)
     mt.start()
 
-    #M.state = 'IDLE'
+    M.state = 'IDLE'
 
-    pprint.pprint(M.idle())
+    pprint.pprint(M.send_command('IDLE'))
 
-    pprint.pprint(M.logout())
+    pprint.pprint(M.send_command('LOGOUT' ))
     t = time.time() - t
     print 'total time taken = %s seconds' % t
 
