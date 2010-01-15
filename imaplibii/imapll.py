@@ -38,6 +38,7 @@ standard python IMAP client module) by Piers Lauder.
 import socket, random, re
 from threading import Timer
 import pprint
+from subprocess import PIPE, Popen
 
 # Local imports
 from utils import Int2AP, ContinuationRequests
@@ -152,14 +153,6 @@ class IMAP4(object):
             self.state = 'NONAUTH'
         else:
             raise self.Error(self.welcome)
-
-    '''
-    def _get_state(self):
-        return self.__state
-    def _set_state(self, new_state):
-        self.__state = new_state
-    state = property(_get_state, _set_state)
-    '''
 
     ##
     # Overridable methods
@@ -470,7 +463,7 @@ class IMAP4(object):
         elif line[:2] == '* ':
             # It's untagged
             return line
-        elif line[:2] == '+ ':
+        elif line[:2] == '+ ' or line == '+':
             # It's a continuation, we're sending a literal
             self.send( self.continuation_data.pop(line[2:]) + CRLF )
             return None
@@ -570,6 +563,79 @@ class IMAP4_SSL(IMAP4):
         ssl = <instance>.socket.ssl()
         """
         return self.sslobj
+
+class IMAP4_stream(IMAP4):
+    '''
+    IMAP4 client class over a stream
+
+    Instantiate with: IMAP4_stream(command)
+
+    where "command" is a string that can be passed to os.popen2()
+
+    for more documentation on the IMAP side of the class, see the docstring
+    of the parent class IMAP4.
+    '''
+
+    def __init__(self, command, parse_command = None):
+        self.command = command
+        IMAP4.__init__(self, None, None, parse_command)
+
+    def open(self, host = None, port = None):
+        '''
+        Setup a stream connection.
+        This connection will be used by the routines:
+            read, readline, send, shutdown.
+
+        The host and port arguments are purely vestigial.
+        '''
+        self.host = None
+        self.port = None
+        self.file = None
+        p = Popen(self.command, shell=True, stdin=PIPE, stdout=PIPE,
+                          close_fds=True)
+        self.writefile, self.readfile =  (p.stdin, p.stdout)
+        self.sock = p
+
+    def read(self, size):
+        '''Read 'size' bytes from remote.'''
+        if __debug__:
+            if Debug & D_SERVER:
+                print 'S: Read %d bytes from the server.' % size
+        return self.readfile.read(size)
+
+    def readline(self):
+        '''Read line from remote.'''
+        line = self.readfile.readline()
+        if not line:
+            raise self.Abort('socket error: EOF')
+        if __debug__:
+            if Debug & D_SERVER:
+                print 'S: %s' % line.replace(CRLF,'<cr><lf>')
+        return line
+
+    def send(self, data):
+        '''Send data to remote.'''
+        if __debug__:
+            if Debug & D_CLIENT:
+                print 'C: %s' % data.replace(CRLF,'<cr><lf>')
+        self.writefile.write(data)
+        self.writefile.flush()
+
+    def shutdown(self):
+        '''Close I/O established in "open".'''
+        self.readfile.close()
+        self.writefile.close()
+        try: self.sock.terminate()
+        except: pass
+        else:
+            def do_kill():
+                if self.sock.poll() is None:
+                    self.sock.kill()
+
+            tmr = Timer(15.0, do_kill)
+            tmr.daemon = True
+            tmr.start()
+
 
 
 if __name__ == '__main__':
