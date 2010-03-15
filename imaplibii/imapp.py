@@ -41,7 +41,7 @@ import select
 from threading import Timer
 
 # Local imports
-from imapll import IMAP4, IMAP4_SSL
+from imapll import IMAP4, IMAP4_SSL, IMAP4_stream
 import imapll
 from infolog import InfoLog
 from imapcommands import COMMANDS, STATUS
@@ -120,11 +120,16 @@ class IMAP4P(object):
                          'namespace': '',
                        }
 
-        Please note the when the object is destroied we do an automatic logout,
+        Please note the when the object is destroyed we do an automatic logout,
         you can still use the logout method, but in that case you should
         override the __del__ method, else your're going to raise an exception
         when you try to logout from a closed connection when the object is
         deleted.
+
+        Should you want to connect to the IMAP server using a program that
+        initiates the connection and authenticates for you, set the stream
+        keyword to True and set host to the command that initiates the
+        connection. The login command will not be needed either.
     '''
 
     class Error(Exception):
@@ -142,6 +147,7 @@ class IMAP4P(object):
             host,
             port=None,
             ssl = False,
+            stream = False,
             keyfile = None,
             certfile = None,
             infolog = InfoLog(MAXLOG),
@@ -167,7 +173,10 @@ class IMAP4P(object):
                 port = IMAP4_PORT
 
         try:
-            if ssl:
+            if stream:
+                self.__IMAP4 = IMAP4_stream( host,
+                            parse_command = self.parse_command )
+            elif ssl:
                 self.__IMAP4 = IMAP4_SSL( host = host, port = port,
                     keyfile = keyfile, certfile = certfile,
                     parse_command = self.parse_command )
