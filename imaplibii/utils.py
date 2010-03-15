@@ -242,6 +242,23 @@ def shrink_fetch_list( msg_list ):
 
     return tmp
 
+class NotAvailable(Exception): pass
+
+def auth_ntlm(username, password, domain):
+    try: import ntlm
+    except ImportError:
+        raise NotAvailable
+    def response(challenge):
+        if challenge.startswith('+ '):
+            challenge = challenge[2:]
+        (ServerChallenge, NegotiateFlags) = \
+                                ntlm.parse_NTLM_CHALLENGE_MESSAGE(challenge)
+        return ntlm.create_NTLM_AUTHENTICATE_MESSAGE(ServerChallenge,
+                                                username, domain, password,
+                                                NegotiateFlags)
+    init = ntlm.create_NTLM_NEGOTIATE_MESSAGE(username)
+    return init, response
+
 ##
 # Classes
 ##
