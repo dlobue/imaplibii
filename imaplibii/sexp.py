@@ -30,7 +30,7 @@ import re, string
 
 # Regexp
 literal_re = re.compile(r'^{(\d+)}\r\n')
-simple_re = re.compile(r'^([^ ()]+)')
+simple_re = re.compile(r'^([^ ()\[]+\[[^\]]+\]|[^ ()]+)')
 quoted_re = re.compile(r'^"((?:[^"\\]|\\")*?)"')
 
 # Errors
@@ -113,6 +113,8 @@ if __name__ == '__main__':
     text = '266 FETCH (FLAGS (\Seen) UID 31608 INTERNALDATE "30-Jan-2008 02:48:01 +0000" RFC822.SIZE 4509 ENVELOPE ("Tue, 29 Jan 2008 14:00:24 +0000" "Aprenda as tXcnicas e os truques da cozinha mais doce..." (("Ediclube" NIL "ediclube" "sigmathis.info")) (("Ediclube" NIL "ediclube" "sigmathis.info")) ((NIL NIL "ediclube" "sigmathis.info")) ((NIL NIL "helder" "example.com")) NIL NIL NIL "<64360f85d83238281a27b921fd3e7eb3@localhost.localdomain>"))'
     #text = 'AA 12341 NIL (A NIL "asdasd fffff\\"sdasd" {%d}\r\n%s (D E))(F G)' % ( count, '#' * count)
     #text = 'A B (C NIL (D E))(F G)'
+    text = '99 FETCH (UID 100 RFC822.SIZE 2260 INTERNALDATE "26-Oct-2004 04:35:14 +0000" FLAGS (\Seen) BODY[HEADER.FIELDS (Message-ID)] {54}%s%s)' % ( '\r\n', 'S' * 54 )
+
 
     itx = 300
     rit = xrange(itx)

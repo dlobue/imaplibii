@@ -7,3 +7,4 @@ build/*
 dist/*
 CVS/*
 SVN/*
+*.egg-info/*
