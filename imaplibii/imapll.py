@@ -35,10 +35,11 @@ standard python IMAP client module) by Piers Lauder.
 '''
 
 # Global imports
-import socket, random, re
+import socket, random, re, ssl
 from threading import Timer
 import pprint
 from subprocess import PIPE, Popen
+from platform import system
 
 # Local imports
 from utils import Int2AP, ContinuationRequests
@@ -154,25 +155,107 @@ class IMAP4(object):
         else:
             raise self.Error(self.welcome)
 
+    def _check_socket_alive(self, sock=None):
+        '''
+        Check if the socket is alive. Not sure this is necessary or useful.
+        '''
+        if not sock:
+            sock = self.sock
+
+        r = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+
+    def _set_sock_keepalive(self, sock=None):
+        '''
+        Enable TCP layer 3 keepalive options on the socket.
+        '''
+        if not sock:
+            sock = self.sock
+
+        #Periodically probes the other end of the connection and terminates
+        # if it's half-open.
+        sock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,True)
+        #Max number of keepalive probes TCP should send before dropping a
+        # connection.
+        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 3)
+        #Time in seconds the connection should be idle before TCP starts
+        # sending keepalive probes.
+        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 10)
+        #Time in seconds between keepalive probes.
+        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 2)
+        return sock
+
+    def _open(self, host=None, port=None):
+        if not host:
+            host = self.host
+        else:
+            self.host = host
+        if not port:
+            port = self.port
+        else:
+            self.port = port
+
+        resolv = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
+                                   socket.SOCK_STREAM)
+
+        # Try each address returned by getaddrinfo in turn until we
+        # manage to connect to one.
+        last_error = 0
+        for remote in resolv:
+            af, socktype, proto, canonname, sa = remote
+            sock = socket.socket(af, socktype, proto)
+            last_error = sock.connect_ex(sa)
+            if last_error == 0:
+                break
+            else:
+                sock.close()
+
+        if last_error != 0:
+            raise socket.error(last_error)
+
+        return sock
+
+    def _read(self, size, read_from, rettype=str):
+        """
+        Abstracted version of read.
+        Contains fixes for ssl and Darwin
+        """
+        # sslobj.read() sometimes returns < size bytes
+        data = bytearray()
+        read = 0
+        if (system() == 'Darwin') and (size>0):
+            # This is a hack around Darwin's implementation of realloc() (which
+            # Python uses inside the socket code). On Darwin, we split the
+            # message into 100k chunks, which should be small enough - smaller
+            # might start seriously hurting performance ...
+            # this is taken from OfflineIMAP
+            to_read = lambda s,r: min(s-r,8192)
+        else:
+            to_read = lambda s,r: s-r
+        while len(data) < size:
+            #data = read_from.read(size-read)
+            data.extend( read_from.read(to_read(size,read)) )
+            #read = len(data)
+
+        if type(data) is not rettype:
+            data = rettype(data)
+        return data
+
     ##
     # Overridable methods
     ##
 
-    def open(self, host = 'localhost', port = IMAP4_PORT):
+    def open(self, host=None, port=None):
         '''Setup connection to remote server on "host:port"
         This connection will be used by the routines:
         L{read<read>}, L{readline<readline>}, L{send<send>},
         L{shutdown<shutdown>}.
 
-        @param host: hostname to connect to (default: localhost)
+        @param host: hostname to connect to (default: use host set during instantiation)
 
-        @param port: port to connect to (default: standard IMAP4 port)
+        @param port: port to connect to (default: use port set during instantiation)
         '''
-        self.host = host
-        self.port = port
 
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.connect((host, port))
+        self.sock = self._open(host, port)
         self.file = self.sock.makefile('rb')
 
     def read(self, size):
@@ -180,6 +263,8 @@ class IMAP4(object):
         if __debug__:
             if Debug & D_SERVER:
                 print 'S: Read %d bytes from the server.' % size
+        #Use the abstracted _read method for consistancy.
+        #return self._read(size, self.file)
         return self.file.read(size)
 
     def readline(self):
@@ -274,6 +359,13 @@ class IMAP4(object):
     def _read_resp_loop(self, response):
         '''
         Modified read_responses loop meant for IDLE.
+
+        The idea is to keep reading data from the server until we know we
+        have all of the data that was requested by our last command.
+        
+        The problem with this is it doesn't quite work for IDLE notification.
+        We want updates from IDLE to go into the dispatcher NOW, not 30 minutes
+        later when we end IDLE mode.
         '''
         data_release = None
         resp_buffer = { 'tagged' : {},
@@ -313,6 +405,7 @@ class IMAP4(object):
             del response['untagged'][:]
 
     def idle_dispatch(self, response):
+        #TODO: replace the print statements below with NotImplemented exception.
         print 'Not implemented!'
         print '(got %s response tho, btw)' % str(response)
 
@@ -488,51 +581,56 @@ class IMAP4_SSL(IMAP4):
         certfile = None,
         parse_command=None):
 
+        self.readbuf = bytearray()
         self.keyfile = keyfile
         self.certfile = certfile
         IMAP4.__init__(self, host=host, port=port, parse_command=parse_command)
 
-    def open(self, host = '', port = IMAP4_SSL_PORT):
+    def open(self, host=None, port=None):
         """Setup connection to remote server on "host:port".
             (default: localhost:standard IMAP4 SSL port).
         This connection will be used by the routines:
             read, readline, send, shutdown.
         """
-        self.host = host
-        self.port = port
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.connect((host, port))
-        self.sslobj = socket.ssl(self.sock, self.keyfile, self.certfile)
+        self.sock = self._open(host, port)
+        self.sslobj = ssl.wrap_socket(self.sock, self.keyfile, self.certfile)
+        self.file = self.sslobj.makefile('rb')
 
-    def read(self, size):
+    def bad_read(self, size, rettype=str):
         """Read 'size' bytes from remote."""
         if __debug__:
             if Debug & D_SERVER:
                 print 'S: Read %d bytes from the server.' % size
-        # sslobj.read() sometimes returns < size bytes
-        chunks = []
-        read = 0
-        while read < size:
-            data = self.sslobj.read(size-read)
-            read += len(data)
-            chunks.append(data)
+        #data = self._read(size, self.sslobj, rettype=rettype)
+        #return data
+        return self.sslobj.read(size)
 
-        return ''.join(chunks)
-
-    def readline(self):
+    def bad_readline(self, rettype=str):
         """Read line from remote."""
-        # NB: socket.ssl needs a "readline" method, or perhaps a "makefile" method.
-        line = []
         while 1:
-            char = self.sslobj.read(1)
-            line.append(char)
-            if char == "\n":
+            self.readbuf.extend( self.read(1024, bytearray) )
+            nlidx = self.readbuf.find('\n')
+            if nlidx != -1:
+                line = self.readbuf[:nlidx+1]
+                del self.readbuf[:nlidx+1]
+                if type(line) is not rettype:
+                    line = rettype(line)
                 if __debug__:
                     if Debug & D_SERVER:
-                        print 'S: %s' % ''.join(line).replace(CRLF,'<cr><lf>')
-                return ''.join(line)
+                        print 'S: %s' % line.replace(CRLF,'<cr><lf>')
+                return line
 
     def send(self, data):
+        '''Send data to remote.'''
+        if __debug__:
+            if Debug & D_CLIENT:
+                print 'C: %s' % data.replace(CRLF,'<cr><lf>')
+        try:
+            self.sslobj.sendall(data)
+        except (socket.error, OSError), val:
+            raise self.abort('socket error: %s' % val)
+
+    def old_send(self, data):
         """Send data to remote."""
         # NB: socket.ssl needs a "sendall" method to match socket objects.
         if __debug__:
