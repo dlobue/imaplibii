@@ -28,6 +28,7 @@
 # Imports
 
 import base64
+import imap4utf7
 
 # Attributes:
 
@@ -76,3 +77,6 @@ class Mailbox(object):
 
     def __repr__(self):
         return '<Mailbox instance "%s">' % (self.path)
+
+    def __str__(self):
+        return self.path.decode('imap4-utf-7')

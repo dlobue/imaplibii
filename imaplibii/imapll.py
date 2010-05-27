@@ -25,24 +25,25 @@
 # $Id$
 #
 
-'''This is an IMAP low level module, it provides the basic mechanisms
+"""
+This is an IMAP low level module, it provides the basic mechanisms
 to connect to an IMAP server. It makes no attempt to parse the server responses.
 The only processing made is striping the CRLF from the end of each line returned
 by the server.
 
-NOTES: This code is an adaptation of the original imaplib module code (the
-standard python IMAP client module) by Piers Lauder.
-'''
+.. note::
+    This code is an adaptation of the original imaplib module code (the
+    standard python IMAP client module) by Piers Lauder.
+"""
 
 # Global imports
-import socket, random, re, ssl
+import random, re
 from threading import Timer
-import pprint
-from subprocess import PIPE, Popen
-from platform import system
+from collections import deque
 
 # Local imports
 from utils import Int2AP, ContinuationRequests
+from imaplibii.errors import Error, Abort, ReadOnly
 
 # Constants
 
@@ -55,15 +56,15 @@ Debug = 0
 
 MAXCOMLEN = 48      #: Max command len to store on the tagged_commands dict
 
-IMAP4_PORT = 143    #: Default IMAP port
-IMAP4_SSL_PORT = 993 #: Default IMAP SSL port
 CRLF = '\r\n'
 
 literal_re = re.compile('.*{(?P<size>\d+)}$')
 send_literal_re = re.compile('.*{(?P<size>\d+)}\r\n')
 
+
 class IMAP4(object):
-    '''Bare bones IMAP client.
+    """
+    Bare bones IMAP client.
 
     This class implements a very simple IMAP client, all it does is to send
     strings to the server and retrieve the server responses.
@@ -75,7 +76,7 @@ class IMAP4(object):
           the server can represent the subject as a literal. The envelope
           response will be assembled as a single string.
         - The continuation requests are handled transparently with the help of
-          the L{ContinuationRequests Class<ContinuationRequests>}.
+          the `ContinuationRequests Class`.
         - The responses are encapsulated on a dictionary.
 
           For this conversation::
@@ -107,23 +108,9 @@ class IMAP4(object):
         tag, response = M.send_command('LOGIN %s "%s"' % ('user', 'some pass'))
         tag, response = M.send_command('CAPABILITY')
         tag, response = M.send_command('LOGOUT' )
+    """
 
-    '''
-    class Error(Exception):
-        '''Logical errors - debug required'''
-        pass
-    class Abort(Exception):
-        '''Service errors - close and retry'''
-        pass
-    class ReadOnly(Exception):
-        '''Mailbox status changed to READ-ONLY'''
-        pass
-
-    def __init__(self, host, port=IMAP4_PORT, parse_command = None):
-        # Connection
-        self.host = host
-        self.port = port
-
+    def __init__(self, transport, parse_command=None):
         # Create unique tag for this session,
         # and compile tagged response matcher.
         self.tagpre = Int2AP(random.randint(4096, 65535))
@@ -135,202 +122,70 @@ class IMAP4(object):
         self.tagged_commands = {}
         self.continuation_data = ContinuationRequests()
 
-        # Open the connection to the server
-        self.open( host, port )
-
-        # State of the connection:
-        self.state = 'LOGOUT'
-
-        self.welcome = self._get_response()
+        self._state = deque(maxlen=3)
+        self._cmdque = deque()
 
         if parse_command:
             self.parse_command = parse_command
         else:
             self.parse_command = self.dummy_parse_command
 
+        # Open the connection to the server
+        self._transport = transport
+
+        # State of the connection:
+        self.state = 'LOGOUT'
+
+        self.welcome = self._get_response()
+
         if 'PREAUTH' in self.welcome:
             self.state = 'AUTH'
         elif 'OK' in self.welcome:
             self.state = 'NONAUTH'
         else:
-            raise self.Error(self.welcome)
+            raise Error(self.welcome)
 
-    def _check_socket_alive(self, sock=None):
-        '''
-        Check if the socket is alive. Not sure this is necessary or useful.
-        '''
-        if not sock:
-            sock = self.sock
+    
 
-        r = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+    _state_set = lambda x,y: x._state.append(y)
+    _state_get = lambda x: x._state[-1]
+    _state_del = lambda x: x._state.pop()
+    state = property(_state_get, _state_set, _state_del, "This is the state property.")
 
-    def _set_sock_keepalive(self, sock=None):
-        '''
-        Enable TCP layer 3 keepalive options on the socket.
-        '''
-        if not sock:
-            sock = self.sock
 
-        #Periodically probes the other end of the connection and terminates
-        # if it's half-open.
-        sock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,True)
-        #Max number of keepalive probes TCP should send before dropping a
-        # connection.
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 3)
-        #Time in seconds the connection should be idle before TCP starts
-        # sending keepalive probes.
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 10)
-        #Time in seconds between keepalive probes.
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 2)
-        return sock
-
-    def _open(self, host=None, port=None):
-        if not host:
-            host = self.host
-        else:
-            self.host = host
-        if not port:
-            port = self.port
-        else:
-            self.port = port
-
-        resolv = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
-                                   socket.SOCK_STREAM)
-
-        # Try each address returned by getaddrinfo in turn until we
-        # manage to connect to one.
-        last_error = 0
-        for remote in resolv:
-            af, socktype, proto, canonname, sa = remote
-            sock = socket.socket(af, socktype, proto)
-            last_error = sock.connect_ex(sa)
-            if last_error == 0:
-                break
-            else:
-                sock.close()
-
-        if last_error != 0:
-            raise socket.error(last_error)
-
-        return sock
-
-    def _read(self, size, read_from, rettype=str):
-        """
-        Abstracted version of read.
-        Contains fixes for ssl and Darwin
-        """
-        # sslobj.read() sometimes returns < size bytes
-        data = bytearray()
-        read = 0
-        if (system() == 'Darwin') and (size>0):
-            # This is a hack around Darwin's implementation of realloc() (which
-            # Python uses inside the socket code). On Darwin, we split the
-            # message into 100k chunks, which should be small enough - smaller
-            # might start seriously hurting performance ...
-            # this is taken from OfflineIMAP
-            to_read = lambda s,r: min(s-r,8192)
-        else:
-            to_read = lambda s,r: s-r
-        while len(data) < size:
-            #data = read_from.read(size-read)
-            data.extend( read_from.read(to_read(size,read)) )
-            #read = len(data)
-
-        if type(data) is not rettype:
-            data = rettype(data)
-        return data
-
-    ##
-    # Overridable methods
-    ##
-
-    def open(self, host=None, port=None):
-        '''Setup connection to remote server on "host:port"
-        This connection will be used by the routines:
-        L{read<read>}, L{readline<readline>}, L{send<send>},
-        L{shutdown<shutdown>}.
-
-        @param host: hostname to connect to (default: use host set during instantiation)
-
-        @param port: port to connect to (default: use port set during instantiation)
-        '''
-
-        self.sock = self._open(host, port)
-        self.file = self.sock.makefile('rb')
-
-    def read(self, size):
-        '''Read 'size' bytes from remote.'''
-        if __debug__:
-            if Debug & D_SERVER:
-                print 'S: Read %d bytes from the server.' % size
-        #Use the abstracted _read method for consistancy.
-        #return self._read(size, self.file)
-        return self.file.read(size)
-
-    def readline(self):
-        '''Read line from remote.'''
-        line = self.file.readline()
-        if not line:
-            raise self.Abort('socket error: EOF')
-        if __debug__:
-            if Debug & D_SERVER:
-                print 'S: %s' % line.replace(CRLF,'<cr><lf>')
-        return line
-
-    def send(self, data):
-        '''Send data to remote.'''
-        if __debug__:
-            if Debug & D_CLIENT:
-                print 'C: %s' % data.replace(CRLF,'<cr><lf>')
-        try:
-            self.sock.sendall(data)
-        except (socket.error, OSError), val:
-            raise self.abort('socket error: %s' % val)
-
-    def shutdown(self):
-        '''Close I/O established in "open".'''
-        self.file.close()
-        self.sock.close()
-
-    def socket(self):
-        '''
-        Return socket instance used to connect to IMAP4 server.
-        '''
-        return self.sock
 
     def push_continuation( self, obj ):
-        '''Insert a continuation in the continuation queue.
+        """
+        Insert a continuation in the continuation queue.
 
-        @param obj: this parameter can be either a string, or a callable. If
+        :param obj: this parameter can be either a string, or a callable. If
         it's a string it will be poped unmodified when the next continuation
         is requested by the server. If it's a callable, the return from the
         callable will be sent to the server. The callable is called using the
         continuation data as argument.
-        '''
-        self.continuation_data.push( obj )
+        """
+        self.continuation_data.append( obj )
 
-    ##
     # SEND/RECEIVE commands from the server
-    ##
 
     def send_command(self, command, read_resp = True ):
-        '''
+        """
         Send a command to the server:
 
-            - Handles literals sent to teh server;
+            - Handles literals sent to the server
             - Updates the tags sent to the server (<instance>.tagged_commands);
             - <instance>.tagged_commands[tag] - contains the first MAXCOMLEN
               of the command;
 
-        @param command: command to be sent to the server, without the tag and
+        :param command: command to be sent to the server, without the tag and
         the final CRLF.
-        @param read_resp: it true, automatically reads the server response.
-        @type  read_resp: Boolean
+        :param read_resp: it true, automatically reads the server response.
+        :type  read_resp: Boolean
 
-        @return:
+        :returns::
             - tag: the tag used on the sent command;
             - response from the server to the sent command (only if read_resp);
-        '''
+        """
         tag = self._new_tag()
 
         # Do not store the complete command on tagged_commands
@@ -344,20 +199,32 @@ class IMAP4(object):
         if lt:
             # If there are any additional command arguments, the literal octets
             # are followed by a space and those arguments (from RFC3501 sec 7.5)
-            self.continuation_data.push(command[lt.end():])
+            self.continuation_data.append(command[lt.end():])
             command = command[:lt.end()-2]
 
         # Send the command to the server
         self.tagged_commands[tag] = tagcommand
-        self.send('%s %s%s' % (tag, command, CRLF))
+        self._transport.write('%s %s%s' % (tag, command, CRLF))
 
         if read_resp:
             return tag, self.read_responses(tag)
         else:
             return tag
 
+    def _idle_dispatch(self, response):
+        try:
+            return self.idle_dispatch(response)
+        finally:
+            response['tagged'].clear()
+            del response['untagged'][:]
+
+    def idle_dispatch(self, response):
+        #TODO: replace the print statements below with NotImplemented exception.
+        print 'Not implemented!'
+        print '(got %s response tho, btw)' % str(response)
+
     def _read_resp_loop(self, response):
-        '''
+        """
         Modified read_responses loop meant for IDLE.
 
         The idea is to keep reading data from the server until we know we
@@ -366,7 +233,7 @@ class IMAP4(object):
         The problem with this is it doesn't quite work for IDLE notification.
         We want updates from IDLE to go into the dispatcher NOW, not 30 minutes
         later when we end IDLE mode.
-        '''
+        """
         data_release = None
         resp_buffer = { 'tagged' : {},
                         'untagged' : [] }
@@ -397,22 +264,11 @@ class IMAP4(object):
         response = resp_buffer
         return response
 
-    def _idle_dispatch(self, response):
-        try:
-            return self.idle_dispatch(response)
-        finally:
-            response['tagged'].clear()
-            del response['untagged'][:]
-
-    def idle_dispatch(self, response):
-        #TODO: replace the print statements below with NotImplemented exception.
-        print 'Not implemented!'
-        print '(got %s response tho, btw)' % str(response)
 
     def _read_resp_loop1(self, loop_cond_chk, response):
-        '''
+        """
         Generic read_responses loop.
-        '''
+        """
         while loop_cond_chk:
             # If we have responses to read we should get them
             # from the server up until there are no more responses
@@ -431,11 +287,11 @@ class IMAP4(object):
             # We've sent a continuation
             pass
         else:
-            raise self.Error('Unknown response:\n%s' % resp)
+            raise Error('Unknown response:\n%s' % resp)
         return response
 
     def read_responses(self, tag):
-        '''
+        """
         Reads the responses from the server.
 
         The rules followed are:
@@ -461,16 +317,14 @@ class IMAP4(object):
         tagged response for the tag parameter.
 
         @return: Returns the server response filtred by
-        L{parse_command<parse_command>}.
-        '''
+        `parse_command`.
+        """
         response = { 'tagged' : {},
                      'untagged' : [] }
 
         response = self._read_resp_loop(response)
 
-        if self.continuation_data:
-            pprint.pprint(self.continuation_data)
-        self.continuation_data.clear()
+        assert not self.continuation_data, "still have leftover continuation data"
 
         if __debug__:
             if Debug & D_RESPONSE:
@@ -479,8 +333,8 @@ class IMAP4(object):
         return self.parse_command(tag, response)
 
     def dummy_parse_command(self, tag, response):
-        '''Further processing of the server response.
-        This method is called by L{read_responses<read_responses>}.
+        """Further processing of the server response.
+        This method is called by `read_responses`.
 
         @param tag: the tag used on the command.
         @param response: a server response on the format::
@@ -491,24 +345,24 @@ class IMAP4(object):
 
         @return: Since this is an abstract method, it only returns the fed
         response, unmodified.
-        '''
+        """
         return response
 
     ##
     # Private methods
     ##
     def _new_tag(self):
-        '''Returns a new tag.'''
+        """Returns a new tag."""
         tag = '%s%03d' % (self.tagpre, self.tagnum)
         self.tagnum += 1
         return tag
 
     def _get_line(self):
-        '''Gets a line from the server. If the line contains a literal in it,
+        """Gets a line from the server. If the line contains a literal in it,
         it will recurse until we have read a complete line.
-        '''
+        """
         # Read a line from the server
-        line = self.readline()[:-2]
+        line = self._transport.readline()[:-2]
 
         # Verify if a literal is comming
         lt = literal_re.match(line)
@@ -516,13 +370,14 @@ class IMAP4(object):
             # read 'size' bytes from the server and append them to
             # the line read and read the rest of the line
             size = int(lt.group('size'))
-            literal = self.read(size)
+            literal = self._transport.read(size)
             line += CRLF + literal + self._get_line()
 
         return line
 
     def _get_response(self):
-        '''This method is called from within L{read_responses<read_responses>},
+        """
+        This method is called from within `read_responses`,
         it serves the purpose of making a broad classification of the server
         responses. The possibilities are:
 
@@ -533,7 +388,7 @@ class IMAP4(object):
               continaution response will be poped from the continuation queue.
               If we don't have a prepared continuation, we'll try to cancel the
               command by sending a '*'.
-        '''
+        """
         # Read a line from the server
         line = self._get_line()
 
@@ -543,7 +398,7 @@ class IMAP4(object):
             # It's tagged
             tag = tg.group('tag')
             if not tag in self.tagged_commands:
-                raise self.Abort('unexpected tagged response: %s' % line)
+                raise Abort('unexpected tagged response: %s' % line)
             type = tg.group('type')
             data = tg.group('data')
             response = { 'status': type, 'message': data,
@@ -558,186 +413,19 @@ class IMAP4(object):
             return line
         elif line[:2] == '+ ' or line == '+':
             # It's a continuation, we're sending a literal
-            self.send( self.continuation_data.pop(line[2:]) + CRLF )
+            self._transport.write( self.continuation_data.send(line[2:]) + CRLF )
             return None
         else:
-            raise self.Abort('What now??? What\'s this:\nS: %s' % line)
-
-class IMAP4_SSL(IMAP4):
-    """IMAP4 client class over SSL connection
-
-    Instantiate with: IMAP4_SSL([host[, port[, keyfile[, certfile]]]])
-
-            host - host's name (default: localhost);
-            port - port number (default: standard IMAP4 SSL port).
-            keyfile - PEM formatted file that contains your private key (default: None);
-            certfile - PEM formatted certificate chain file (default: None);
-
-    for more documentation see the docstring of the parent class IMAP4.
-    """
-    def __init__(self, host,
-        port = IMAP4_SSL_PORT,
-        keyfile = None,
-        certfile = None,
-        parse_command=None):
-
-        self.readbuf = bytearray()
-        self.keyfile = keyfile
-        self.certfile = certfile
-        IMAP4.__init__(self, host=host, port=port, parse_command=parse_command)
-
-    def open(self, host=None, port=None):
-        """Setup connection to remote server on "host:port".
-            (default: localhost:standard IMAP4 SSL port).
-        This connection will be used by the routines:
-            read, readline, send, shutdown.
-        """
-        self.sock = self._open(host, port)
-        self.sslobj = ssl.wrap_socket(self.sock, self.keyfile, self.certfile)
-        self.file = self.sslobj.makefile('rb')
-
-    def bad_read(self, size, rettype=str):
-        """Read 'size' bytes from remote."""
-        if __debug__:
-            if Debug & D_SERVER:
-                print 'S: Read %d bytes from the server.' % size
-        #data = self._read(size, self.sslobj, rettype=rettype)
-        #return data
-        return self.sslobj.read(size)
-
-    def bad_readline(self, rettype=str):
-        """Read line from remote."""
-        while 1:
-            self.readbuf.extend( self.read(1024, bytearray) )
-            nlidx = self.readbuf.find('\n')
-            if nlidx != -1:
-                line = self.readbuf[:nlidx+1]
-                del self.readbuf[:nlidx+1]
-                if type(line) is not rettype:
-                    line = rettype(line)
-                if __debug__:
-                    if Debug & D_SERVER:
-                        print 'S: %s' % line.replace(CRLF,'<cr><lf>')
-                return line
-
-    def send(self, data):
-        '''Send data to remote.'''
-        if __debug__:
-            if Debug & D_CLIENT:
-                print 'C: %s' % data.replace(CRLF,'<cr><lf>')
-        try:
-            self.sslobj.sendall(data)
-        except (socket.error, OSError), val:
-            raise self.abort('socket error: %s' % val)
-
-    def old_send(self, data):
-        """Send data to remote."""
-        # NB: socket.ssl needs a "sendall" method to match socket objects.
-        if __debug__:
-            if Debug & D_CLIENT:
-                print 'C: %s' % data.replace(CRLF,'<cr><lf>')
-        bytes = len(data)
-        while bytes > 0:
-            sent = self.sslobj.write(data)
-            if sent == bytes:
-                break    # avoid copy
-            data = data[sent:]
-            bytes = bytes - sent
-
-    def shutdown(self):
-        """Close I/O established in "open"."""
-        self.sock.close()
-
-    def socket(self):
-        """Return socket instance used to connect to IMAP4 server.
-
-        socket = <instance>.socket()
-        """
-        return self.sock
-
-    def ssl(self):
-        """Return SSLObject instance used to communicate with the IMAP4 server.
-
-        ssl = <instance>.socket.ssl()
-        """
-        return self.sslobj
-
-class IMAP4_stream(IMAP4):
-    '''
-    IMAP4 client class over a stream
-
-    Instantiate with: IMAP4_stream(command)
-
-    where "command" is a string that can be passed to os.popen2()
-
-    for more documentation on the IMAP side of the class, see the docstring
-    of the parent class IMAP4.
-    '''
-
-    def __init__(self, command, parse_command = None):
-        self.command = command
-        IMAP4.__init__(self, None, None, parse_command)
-
-    def open(self, host = None, port = None):
-        '''
-        Setup a stream connection.
-        This connection will be used by the routines:
-            read, readline, send, shutdown.
-
-        The host and port arguments are purely vestigial.
-        '''
-        self.host = None
-        self.port = None
-        self.file = None
-        p = Popen(self.command, shell=True, stdin=PIPE, stdout=PIPE,
-                          close_fds=True)
-        self.writefile, self.readfile =  (p.stdin, p.stdout)
-        self.sock = p
-
-    def read(self, size):
-        '''Read 'size' bytes from remote.'''
-        if __debug__:
-            if Debug & D_SERVER:
-                print 'S: Read %d bytes from the server.' % size
-        return self.readfile.read(size)
-
-    def readline(self):
-        '''Read line from remote.'''
-        line = self.readfile.readline()
-        if not line:
-            raise self.Abort('socket error: EOF')
-        if __debug__:
-            if Debug & D_SERVER:
-                print 'S: %s' % line.replace(CRLF,'<cr><lf>')
-        return line
-
-    def send(self, data):
-        '''Send data to remote.'''
-        if __debug__:
-            if Debug & D_CLIENT:
-                print 'C: %s' % data.replace(CRLF,'<cr><lf>')
-        self.writefile.write(data)
-        self.writefile.flush()
-
-    def shutdown(self):
-        '''Close I/O established in "open".'''
-        self.readfile.close()
-        self.writefile.close()
-        try: self.sock.terminate()
-        except: pass
-        else:
-            def do_kill():
-                if self.sock.poll() is None:
-                    self.sock.kill()
-
-            tmr = Timer(15.0, do_kill)
-            tmr.daemon = True
-            tmr.start()
+            raise Abort('What now??? What\'s this:\nS: %s' % line)
 
 
 
 if __name__ == '__main__':
+    import cgitb
+    cgitb.enable(format='txt')
     import getopt, getpass, sys
+    from pprint import pprint
+    from imaplibii.transports import tcp_stream, ssl_stream
 
     try:
         optlist, args = getopt.getopt(sys.argv[1:], 'd:s:')
@@ -748,14 +436,16 @@ if __name__ == '__main__':
 
     if not args: args = ('',)
 
-    host = args[0]
+    host = 'imap.gmail.com'
 
-    USER = getpass.getuser()
-    PASSWD = getpass.getpass("IMAP password for %s on %s: " % (USER, host or "localhost"))
+    USER = 'dom.lobue@gmail.com'
+    PASSWD = getpass.getpass("IMAP password for %s on %s: " % (USER, host))
 
-    M = IMAP4( host )
+    M = IMAP4( ssl_stream( host ) )
 
     M.send_command('LOGIN %s "%s"' % (USER, PASSWD))
+
+    pprint(M.send_command('LIST "" "*"'))
 
     M.send_command('LOGOUT' )
 

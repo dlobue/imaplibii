@@ -25,12 +25,14 @@
 # $Id$
 #
 
-'''This module provides a single class that is used to register status responses
+"""
+This module provides a single class that is used to register status responses
 from the server.
-'''
+"""
 
 class InfoLog(list):
-    '''Collects and manages the information and warnings issued by the server in
+    """
+    Collects and manages the information and warnings issued by the server in
     the form of status responses.
 
     This can be overriden or completly replaced provided that the interface
@@ -38,51 +40,56 @@ class InfoLog(list):
 
     By default it stores the last 10 entries, this can be defined while
     creating the instance.
-    '''
+    """
     def __init__(self, max_entries = 10, *args ):
-        '''Creates a new InfoLog list.
+        """
+        Creates a new InfoLog list.
 
-        @param max_entries: number of entries to keep
-        @type max_entries: integer
-        '''
+        :param max_entries: number of entries to keep
+        :type max_entries: integer
+        """
         self.max_entries = max_entries
         self.action_list = []
 
         list.__init__(self, *args)
 
-    def addEntry( self, type, data ):
-        '''Adds a new log entry.
 
-        @param type: the type of the entry (warning, error, info, etc)
-        @type  type: string
+    def addEntry( self, typ, data ):
+        """
+        Adds a new log entry.
 
-        @param data: any python object.
-        '''
-        type = type.upper()
+        :param typ: the type of the entry (warning, error, info, etc)
+        :type  typ: string
+
+        :param data: any python object.
+        """
+        typ = typ.upper()
         if len(self) == self.max_entries:
             del self[0]
-        self.append({'type':type, 'data':data })
+        self.append({'type':typ, 'data':data })
 
         for action in self.action_list:
-            if action['type'] == type:
-                action['action'](type, data)
+            if action['type'] == typ:
+                action['action'](typ, data)
 
-    def addAction( self, type, action ):
-        '''A callback action can be defined. Every time a new log is made
+
+    def addAction( self, typ, action ):
+        """
+        A callback action can be defined. Every time a new log is made
         the callback action will be executed.
 
-        @param type: the type that will trigger the action
-        @param action: a python callable, the arguments used will be
-        (type, data).
-        '''
-        self.action_list.append( { 'type': type, 'action': action } )
+        :param typ: the type that will trigger the action
+        :param action: a python callable, the arguments used will be
+        (typ, data).
+        """
+        self.action_list.append( { 'type': typ, 'action': action } )
 
 
 if __name__ == '__main__':
     a = InfoLog()
 
-    def printAA( type, data ):
-        print 'Type: ', type
+    def printAA( typ, data ):
+        print 'Type: ', typ
         print 'Data: :', data
 
     a.addAction( 'AA', printAA )

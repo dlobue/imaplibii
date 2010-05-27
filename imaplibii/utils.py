@@ -25,19 +25,60 @@
 # $Id$
 #
 
-'''Utility functions for the imaplib2 module.
-'''
+"""Utility functions for the imaplibii module."""
+
 
 # Global imports
 import time, datetime
 import re
+from sys import exc_info
+from collections import deque
+from types import GeneratorType, FunctionType
 from email.header import decode_header
+from platform import python_version
+from imaplibii.errors import NotAvailable
+
 
 # Utility functions
+def min_ver_chk(minver):
+    """
+    Ensure that the version of python running meets at least version `minver`.
+
+    >>> platform.python_version()
+    '2.3.4'
+    >>> min_ver_chk([2, 5, 3])
+    0
+    >>> platform.python_version()
+    '2.5.3'
+    >>> min_ver_chk([2, 5, 3])
+    1
+    >>> platform.python_version()
+    '2.6.4'
+    >>> min_ver_chk([2, 5, 3])
+    2
+
+    :param minver: Minimum version of python required.
+    :type minver: list of integers.
+    :returns: a positive integer if successful.
+    """
+    pyv = python_version()
+    pyv = map(int, pyv.split('.'))
+
+    def vercmp(x):
+        if pyv[x] > minver[x]:
+            return 2
+        elif pyv[x] < minver[x]:
+            return 0
+
+    for x in xrange(min(len(pyv), len(minver))):
+        r = vercmp(x)
+        if r: return 2 #success, exit early
+        elif r is 0: return 0 #fail
+    return 1 #just barely meets the reqs.
+
+
 def getUnicodeHeader( header ):
-    '''Returns an unicode string with the content of the
-    header string.
-    '''
+    """Returns an unicode string with the content of the header string."""
     if not header: return ''
 
     # Decode the header:
@@ -62,14 +103,14 @@ def getUnicodeHeader( header ):
     return ' '.join(header_list)
 
 def getUnicodeMailAddr( address_list ):
-    '''Return an address list with the mail addresses
-    '''
+    """Return an address list with the mail addresses"""
     if not isinstance(address_list,list):
         return []
 
     # Verify the encoding:
     return [ (unquote(getUnicodeHeader(Xi[0])),'%s@%s' % (Xi[2],Xi[3]))
              for Xi in address_list ]
+
 
 def Int2AP(num):
     """Convert integer to A-P string representation."""
@@ -81,10 +122,12 @@ def Int2AP(num):
     return val
 
 
-def makeTagged(tagged):
-    '''Composes a string with the tagged response'''
-    return '\nStatus: %(status)s\nMessage: %(message)s\nCommand: %(command)s' %\
-        tagged
+
+def makeTagged(t):
+    """Composes a string with the tagged response"""
+    r = '\nStatus: %(status)s\nMessage: %(message)s\nCommand: %(command)s' % t
+    return r
+
 
 def unquote( string ):
     if len(string) > 0:
@@ -92,6 +135,8 @@ def unquote( string ):
            string[0] == string[-1] == '\'':
             return string[1:-1]
     return string
+
+
 
 Mon2num = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
         'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12}
@@ -109,10 +154,11 @@ EnvelopeDate = re.compile(r'(?:(?P<week_day>[A-Z][a-z][a-z]), )?(?P<day>[ \d][0-
     )
 
 def envelopedate2datetime(resp):
-    '''Convert an envelope date to tuple
+    """
+    Convert an envelope date to tuple
 
-    Returns Python time module tuple.
-    '''
+    :returns: Python time module tuple.
+    """
     if not resp:
         return datetime.datetime.fromtimestamp(0)
 
@@ -159,10 +205,13 @@ def envelopedate2datetime(resp):
 
     return datetime.datetime.fromtimestamp(utc - zone)
 
-def Internaldate2tuple(resp):
-    """Convert IMAP4 INTERNALDATE to UT.
 
-    Returns Python time module tuple.
+
+def Internaldate2tuple(resp):
+    """
+    Convert IMAP4 INTERNALDATE to UT.
+
+    :returns: Python time module tuple.
     """
     mo = InternalDate.match(resp)
     if not mo:
@@ -200,15 +249,18 @@ def Internaldate2tuple(resp):
 
     return time.localtime(utc - zone)
 
+
+
 def shrink_fetch_list( msg_list ):
-    '''Shrinks the message list to use on the fetch command, consecutive msg_list
+    """
+    Shrinks the message list to use on the fetch command, consecutive msg_list
     numbers will be converted to first:last.
 
-    @param msg_list: a list of message numbers or uids
-    @type msg_list: list
+    :param msg_list: a list of message numbers or uids
+    :type msg_list: list
 
-    @return: a list with the shrinked msg_list
-    '''
+    :returns: a list with the shrinked msg_list
+    """
     tmp = []
     msg_list = list(msg_list)
     msg_list.sort()
@@ -242,10 +294,10 @@ def shrink_fetch_list( msg_list ):
 
     return tmp
 
-class NotAvailable(Exception): pass
+
 
 def auth_ntlm(username, password, domain):
-    try: import ntlm
+    try: from ntlm import ntlm
     except ImportError:
         raise NotAvailable
     def response(challenge):
@@ -259,31 +311,94 @@ def auth_ntlm(username, password, domain):
     init = ntlm.create_NTLM_NEGOTIATE_MESSAGE(username)
     return init, response
 
-##
+
 # Classes
-##
 
-class ContinuationRequests(list):
-    '''Class to be used with the continuation requests made by the server.
-    '''
-    def push(self, data ):
-        self.insert(0, data)
 
-    def pop(self, challenge):
-        try:
-            response = list.pop(self)
-            try:
-                response = response(challenge)
-            except TypeError:
-                pass
-            return response
+class ContinuationRequests(deque):
+    """
+    Class to be used with the continuation requests made by the server.
+    This is a deque for efficient append/pop operations on either side.
+    
+    Use the next method to get the next response in line.
+
+    """
+    def send(self, arg):
+        return self._cointeract('send', arg)
+
+    def next(self):
+        return self._cointeract('next')
+
+    def throw(self, typ, val=None, tb=None):
+        return self._cointeract('throw', typ, val, tb)
+
+    send.__doc__ = GeneratorType.send.__doc__
+    next.__doc__ = GeneratorType.next.__doc__
+    throw.__doc__ = GeneratorType.throw.__doc__
+    put = deque.append
+
+
+
+    def _cointeract(self, action, *args, **kwargs):
+        """
+        Actually runs the desired method with the appropriate args
+        on the generator. This is based on the command dispatch pattern.
+        """
+        try: return getattr(self._runner, action)(*args, **kwargs)
+        except (AttributeError, StopIteration):
+            #either the trampoline schedular was left in a stopped state
+            #the last time it was used, or it has never been used.
+            self._runner = self._trampoline()
+            return getattr(self, action)(*args)
         except IndexError: # Empty list
             return '*'
 
-    def clear(self):
-        del self[:]
-        #try:
-        #    while True: list.pop(self)
-        #except: pass
 
+    def _trampoline(self):
+        """
+        This is a trampoline scheduler. It goes through each item
+        stored in the deque and if the item turns out to be a generator,
+        iterate through the generators items. If the generator yields a nother
+        generator, put the first generator at the top of the queue, and iterate 
+        through the new generator. When a generator is depleted of all items,
+        switch get another item from the deque.
+        """
+        t, v = None, None
+        while 1:
+            n = self.popleft()
+            if type(n) is FunctionType:
+                if v is not None:
+                    n = n(v)
+                    v = None
+                else:
+                    n = n()
+            if type(n) is GeneratorType:
+                while 1:
+                    try:
+                        if v is not None:
+                            assert t is None
+                            x = n.send(v)
+                            v = None
+                        elif t is not None:
+                            #we were thrown an exception
+                            x = n.throw(*t)
+                            del t #just to be safe: python documentation warns
+                                  #that the traceback return value can create a
+                                  #circular reference.
+                            t = None
+                        else:
+                            x = n.next()
+                    except StopIteration:
+                        break
+                    if type(x) is FunctionType:
+                        x = x()
+                    if type(x) is GeneratorType:
+                        self.appendleft(n)
+                        n = x
+                        continue
+                    try: v = ( yield x )
+                    except:
+                        t = exc_info()
+                continue
+            v = ( yield n )
 

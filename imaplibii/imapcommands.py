@@ -27,6 +27,12 @@
 
 '''IMAP command list and their allowed states'''
 
+#state constants
+LOGOUT = 0
+NONAUTH = 1
+AUTH = 2
+SELECTED = 3
+
 # From imaplib module:
 COMMANDS = {
         # name          # valid states
