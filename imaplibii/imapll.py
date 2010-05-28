@@ -36,14 +36,19 @@ by the server.
     standard python IMAP client module) by Piers Lauder.
 """
 
-# Global imports
-import random, re
+# stdlib imports
+import random
+import re
+import logging
 from threading import Timer
 from collections import deque
+from weakref import WeakValueDictionary
+from threading import Lock
 
 # Local imports
 from utils import Int2AP, ContinuationRequests
-from imaplibii.errors import Error, Abort, ReadOnly
+from imaplibii.errors import Error, Abort, ReadOnly, NotYet
+from imapcommands import COMMANDS, EXEMPT_CMDS, STATUS
 
 # Constants
 
@@ -123,18 +128,17 @@ class IMAP4(object):
         self.continuation_data = ContinuationRequests()
 
         self._state = deque(maxlen=3)
+        self._state_lock = Lock()
         self._cmdque = deque()
+        self._tagref = WeakValueDictionary()
 
         if parse_command:
             self.parse_command = parse_command
         else:
             self.parse_command = self.dummy_parse_command
 
-        # Open the connection to the server
+        # Connection to the server
         self._transport = transport
-
-        # State of the connection:
-        self.state = 'LOGOUT'
 
         self.welcome = self._get_response()
 
@@ -187,6 +191,21 @@ class IMAP4(object):
             - response from the server to the sent command (only if read_resp);
         """
         tag = self._new_tag()
+        self._cmdque.append(command)
+        self._tagref[tag] = command
+
+        with self._state_lock:
+            try:
+                if self.state in COMMANDS[command.cmd]:
+                    self.state = tag
+                elif command.cmd not in EXEMPT_CMDS:
+                    raise NotYet
+                self._transport.write(command.format(tag))
+            except NotYet: pass
+
+        #TODO: figure out what to return
+
+
 
         # Do not store the complete command on tagged_commands
         if len(command) > MAXCOMLEN:
@@ -210,6 +229,91 @@ class IMAP4(object):
             return tag, self.read_responses(tag)
         else:
             return tag
+
+    def dummy_parse_command(self, tag, response):
+        """Further processing of the server response.
+        This method is called by `read_responses`.
+
+        @param tag: the tag used on the command.
+        @param response: a server response on the format::
+
+            response = { 'tagged' : {TAG001:{ 'status': ..., 'message': ...,
+                         'command': ... }, ... },
+                     'untagged' : [ '* 1st untagged', '* 2nd untagged', ... ] }
+
+        @return: Since this is an abstract method, it only returns the fed
+        response, unmodified.
+        """
+        return response
+
+    def _new_tag(self):
+        """Returns a new tag."""
+        tag = '%s%03d' % (self.tagpre, self.tagnum)
+        self.tagnum += 1
+        return tag
+
+    #TODO: redo the following methods
+
+    def _get_line(self):
+        """Gets a line from the server. If the line contains a literal in it,
+        it will recurse until we have read a complete line.
+        """
+        # Read a line from the server
+        line = self._transport.readline()[:-2]
+
+        # Verify if a literal is comming
+        lt = literal_re.match(line)
+        if lt:
+            # read 'size' bytes from the server and append them to
+            # the line read and read the rest of the line
+            size = int(lt.group('size'))
+            literal = self._transport.read(size)
+            line += CRLF + literal + self._get_line()
+
+        return line
+
+    def _get_response(self):
+        """
+        This method is called from within `read_responses`,
+        it serves the purpose of making a broad classification of the server
+        responses. The possibilities are:
+
+            - It's a tagged response, the response will be encapsulated on a
+              dict;
+            - It's an untagged response, we return a string;
+            - It's a continuation request, '+ <continuation data>CRLF', a
+              continaution response will be poped from the continuation queue.
+              If we don't have a prepared continuation, we'll try to cancel the
+              command by sending a '*'.
+        """
+        # Read a line from the server
+        line = self._get_line()
+
+        # Verify whether it's a tagged or untagged response:
+        tg = self.tagre.match(line)
+        if tg:
+            # It's tagged
+            tag = tg.group('tag')
+            if not tag in self.tagged_commands:
+                raise Abort('unexpected tagged response: %s' % line)
+            type = tg.group('type')
+            data = tg.group('data')
+            response = { 'status': type, 'message': data,
+                         'tag': tag,
+                         'command': self.tagged_commands[tag] }
+            del self.tagged_commands[tag]
+            return response
+        elif self.state == 'IDLE':
+            return line
+        elif line[:2] == '* ':
+            # It's untagged
+            return line
+        elif line[:2] == '+ ' or line == '+':
+            # It's a continuation, we're sending a literal
+            self._transport.write( self.continuation_data.send(line[2:]) + CRLF )
+            return None
+        else:
+            raise Abort('What now??? What\'s this:\nS: %s' % line)
 
     def _idle_dispatch(self, response):
         try:
@@ -263,7 +367,6 @@ class IMAP4(object):
 
         response = resp_buffer
         return response
-
 
     def _read_resp_loop1(self, loop_cond_chk, response):
         """
@@ -326,97 +429,12 @@ class IMAP4(object):
 
         assert not self.continuation_data, "still have leftover continuation data"
 
+        logging.debug(response)
         if __debug__:
             if Debug & D_RESPONSE:
                 print response
 
         return self.parse_command(tag, response)
-
-    def dummy_parse_command(self, tag, response):
-        """Further processing of the server response.
-        This method is called by `read_responses`.
-
-        @param tag: the tag used on the command.
-        @param response: a server response on the format::
-
-            response = { 'tagged' : {TAG001:{ 'status': ..., 'message': ...,
-                         'command': ... }, ... },
-                     'untagged' : [ '* 1st untagged', '* 2nd untagged', ... ] }
-
-        @return: Since this is an abstract method, it only returns the fed
-        response, unmodified.
-        """
-        return response
-
-    ##
-    # Private methods
-    ##
-    def _new_tag(self):
-        """Returns a new tag."""
-        tag = '%s%03d' % (self.tagpre, self.tagnum)
-        self.tagnum += 1
-        return tag
-
-    def _get_line(self):
-        """Gets a line from the server. If the line contains a literal in it,
-        it will recurse until we have read a complete line.
-        """
-        # Read a line from the server
-        line = self._transport.readline()[:-2]
-
-        # Verify if a literal is comming
-        lt = literal_re.match(line)
-        if lt:
-            # read 'size' bytes from the server and append them to
-            # the line read and read the rest of the line
-            size = int(lt.group('size'))
-            literal = self._transport.read(size)
-            line += CRLF + literal + self._get_line()
-
-        return line
-
-    def _get_response(self):
-        """
-        This method is called from within `read_responses`,
-        it serves the purpose of making a broad classification of the server
-        responses. The possibilities are:
-
-            - It's a tagged response, the response will be encapsulated on a
-              dict;
-            - It's an untagged response, we return a string;
-            - It's a continuation request, '+ <continuation data>CRLF', a
-              continaution response will be poped from the continuation queue.
-              If we don't have a prepared continuation, we'll try to cancel the
-              command by sending a '*'.
-        """
-        # Read a line from the server
-        line = self._get_line()
-
-        # Verify whether it's a tagged or untagged response:
-        tg = self.tagre.match(line)
-        if tg:
-            # It's tagged
-            tag = tg.group('tag')
-            if not tag in self.tagged_commands:
-                raise Abort('unexpected tagged response: %s' % line)
-            type = tg.group('type')
-            data = tg.group('data')
-            response = { 'status': type, 'message': data,
-                         'tag': tag,
-                         'command': self.tagged_commands[tag] }
-            del self.tagged_commands[tag]
-            return response
-        elif self.state == 'IDLE':
-            return line
-        elif line[:2] == '* ':
-            # It's untagged
-            return line
-        elif line[:2] == '+ ' or line == '+':
-            # It's a continuation, we're sending a literal
-            self._transport.write( self.continuation_data.send(line[2:]) + CRLF )
-            return None
-        else:
-            raise Abort('What now??? What\'s this:\nS: %s' % line)
 
 
 

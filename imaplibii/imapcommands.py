@@ -81,6 +81,8 @@ COMMANDS = {
         'UNSUBSCRIBE':  ('AUTH', 'SELECTED'),
         }
 
+EXEMPT_CMDS = ('DONE', 'NOOP')
+
 # Addicional status messages returned on the tagged or untagged responses:
 # 'OK','NO','BAD', 'PREAUTH', 'BYE'
 STATUS = ('ALERT',

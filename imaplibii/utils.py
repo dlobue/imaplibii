@@ -38,6 +38,7 @@ from email.header import decode_header
 from platform import python_version
 from imaplibii.errors import NotAvailable
 
+CRLF = '\r\n'
 
 # Utility functions
 def min_ver_chk(minver):
@@ -337,8 +338,6 @@ class ContinuationRequests(deque):
     throw.__doc__ = GeneratorType.throw.__doc__
     put = deque.append
 
-
-
     def _cointeract(self, action, *args, **kwargs):
         """
         Actually runs the desired method with the appropriate args
@@ -352,7 +351,6 @@ class ContinuationRequests(deque):
             return getattr(self, action)(*args)
         except IndexError: # Empty list
             return '*'
-
 
     def _trampoline(self):
         """
@@ -401,4 +399,19 @@ class ContinuationRequests(deque):
                         t = exc_info()
                 continue
             v = ( yield n )
+
+
+
+class Command(object):
+    def __init__(self, cmd, *args, **kwargs):
+        self.cmd = cmd
+        self.args = args
+        self.kwargs = kwargs
+        self.continuation = None
+        self.finish = None
+
+    def format(self, tag):
+        if not self.args:
+            return ' '.join((tag, self.cmd, CRLF))
+        return ' '.join((tag, self.cmd, self.args, CRLF))
 
