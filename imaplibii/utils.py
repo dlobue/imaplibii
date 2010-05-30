@@ -245,7 +245,7 @@ def shrink_fetch_list( msg_list ):
 class NotAvailable(Exception): pass
 
 def auth_ntlm(username, password, domain):
-    try: import ntlm
+    try: from ntlm import ntlm
     except ImportError:
         raise NotAvailable
     def response(challenge):

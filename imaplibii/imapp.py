@@ -189,6 +189,7 @@ class IMAP4P(object):
             raise
 
 
+        self._imapll = self.__IMAP4
         # Wrap IMAP4
         self.welcome = self.__IMAP4.welcome
         #self.send_command = self.__IMAP4.send_command
@@ -541,7 +542,10 @@ class IMAP4P(object):
         except:
             self.push_continuation(authobject)
 
-        return self.processCommand( name, mech )
+        r = self.processCommand( name, mech )
+        print r
+        self.state = 'AUTH'
+        return r
 
     def capability(self):
         '''Fetch capabilities list from server.
