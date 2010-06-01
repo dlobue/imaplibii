@@ -3,6 +3,10 @@ cgitb.enable(format='text')
 
 from collections import deque, namedtuple
 from cStringIO import StringIO
+from functools import partial
+from itertools import islice
+
+from utils import Blank, memoize, Internaldate2tuple
 
 DOWN = '[('
 UP = ')]'
@@ -148,10 +152,12 @@ def scan_sexp():
 
             elif '{' in atom:
                 bytes = int(atom.strip('{} '))
-                y = need_more(result, 'read', [bytes])
-                atom = ( yield y )[1]
+                t = need_more(result, 'read', [bytes])
+                atom = ( yield t )[1]
+                if hasattr(cur_result[-1], '__iter__'):
+                    atom = [ cur_result.pop(), atom ]
                 cur_result.append(atom)
-                del y
+                del t
 
             else:
                 if atom.isdigit():
@@ -171,7 +177,7 @@ def lexer_loop(self):
             if isinstance(parsed, need_more):
                 line = getattr(self.transport, parsed.transportmethod)(*parsed.args)
             else:
-                self.parseque.appendleft(results)
+                self.parseque.append(postparse(results[0]))
                 results = [[]]
                 break
 
@@ -185,11 +191,139 @@ class mockcontainer(object):
         self.parseque.clear()
         self._do_work()
 
-    def __init__(self, s):
-        self.transport = StringIO(s)
+    def __init__(self, s, transport=StringIO):
+        self.transport = transport(s)
         self.parseque = deque()
         self.parser = scan_sexp()
         self.parser.next()
+
+
+
+# Response tag type containers
+untagged = namedtuple('untagged', 'tag type data')
+continuation = namedtuple('continuation', 'tag type data')
+tagged = namedtuple('tagged', 'tag type data')
+
+response_typemap = {
+                  '*': untagged,
+                  '+': continuation,
+                }
+def get_resp_container(tag):
+    return response_typemap.get(tag, tagged)
+
+# Response data containers for different response types (fetch, status, list, etc)
+notice = namedtuple('notice', 'id')
+list_item = namedtuple('list_item', 'attribs delim name')
+info = namedtuple('information', 'data human_readable')
+
+@memoize
+def response_container_factory(cmd, *args, **kwargs):
+    def fmtprep(key,detail):
+        if detail is not Blank and '.' in key:
+            key = key.split('.')[0]
+        elif '.' in key:
+            key = key.replace('.','')
+        return key
+    k = ' '.join((fmtprep(k,d) for k,d in kwargs.iteritems()))
+    a = ' '.join((x for x in args))
+    s = '%s %s' % (a,k)
+    r = namedtuple(cmd, s.lower())
+    return r
+
+
+response_datamap = {
+    'fetch': partial(response_container_factory, 'fetch', 'id'),
+    'status': partial(response_container_factory, 'status', 'name'),
+    'list': list_item,
+    'lsub': list_item,
+    'ok': info,
+    'no': info,
+    'bad': info,
+    'bye': info,
+                }
+
+def get_resp_data_container(rtype):
+    return response_datamap.get(rtype, list)
+
+modval_map = {
+    'INTERNALDATE': Internaldate2tuple,
+    }
+
+
+def postparse(sexp):
+    data = None
+    isexp = iter(sexp)
+    tag = isexp.next()
+    tcontainer = get_resp_container(tag)
+    rtype = isexp.next()
+    if isinstance(rtype, int):
+        #not the rtype, just an imposter
+        data = rtype
+        rtype = isexp.next()
+    rtype = rtype.lower()
+
+    if len(sexp) is 3 and data:
+        #it is a notice response. ex: * 1 exists
+        r = tcontainer(tag, rtype, data=notice(data))
+    else:
+        dcontainer = get_resp_data_container(rtype)
+        if isinstance(dcontainer, list_item):
+            assert not data, 'Somewhere there already is data inside temp data container'
+            r = tcontainer(tag, rtype, data=dcontainer(*isexp))
+        elif isinstance(dcontainer, info):
+            assert not data, 'Somewhere there already is data inside temp data container'
+            data = [isexp.next()]
+            if not hasattr(data[0], '__iter__'):
+                readable = data.extend(isexp)
+                data = None
+            else: readable = (x for x in isexp)
+            try: readable = ' '.join(readable)
+            except TypeError: pass
+            r = tcontainer(tag, rtype, data=dcontainer(ata=data, human_readable=readable))
+        elif dcontainer is list:
+            r = tcontainer(tag, rtype, data=dcontainer(isexp))
+        else:
+            if data is None:
+                data = isexp.next()
+            imapmap = isexp.next()
+            try:
+                t = isexp.next()
+                s = 'An empty iterable still had a value, wtf? %r' % t
+                raise ValueError(s)
+            except StopIteration: pass
+
+            keys = (x.replace('.','') for x in islice(imapmap, 0, None, 2))
+            dcontainer = dcontainer(*keys)
+
+            def imodvalues(imapmap):
+                s, c = 2, 0
+                while 1:
+                    try: field, value = imapmap[s*c:s*(c+1)]
+                    except ValueError:
+                        break
+                    c+=1
+                    func = modval_map.get(field, lambda x: x)
+                    yield func(value)
+                
+            #values = islice(imapmap, 1, None, 2)
+            values = imodvalues(imapmap)
+            r = tcontainer(tag, rtype, data=dcontainer(data, *values))
+
+    return r
+
+
+def _build_ok_response_container(*args):
+    iargs = iter(args)
+    if hasattr(args[0], '__iter__'):
+        data = iargs.next()
+    else: data = None
+    r = info(data=data, human_readable=' '.join(iargs))
+    return r
+
+_build_no_response_container = _build_ok_response_container
+_build_bad_response_container = _build_ok_response_container
+_build_bye_response_container = _build_ok_response_container
+
 
 
 if __name__ == '__main__':
@@ -205,7 +339,8 @@ if __name__ == '__main__':
 
     print 'Test to the s-exp parser:'
     print
-    tobj = mockcontainer(text)
+    #tobj = mockcontainer(text)
+    tobj = mockcontainer('imapsession-1275238402.04.log', partial(open, mode='r'))
 
     print 'Non Recursive (%d times):' % itx
     a = time()

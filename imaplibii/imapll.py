@@ -47,7 +47,7 @@ from threading import Lock
 
 # Local imports
 from utils import Int2AP, ContinuationRequests
-from imaplibii.errors import Error, Abort, ReadOnly, NotYet
+from errors import Error, Abort, ReadOnly, NotYet
 from imapcommands import COMMANDS, EXEMPT_CMDS, STATUS
 
 # Constants
@@ -172,7 +172,7 @@ class IMAP4(object):
 
     # SEND/RECEIVE commands from the server
 
-    def send_command(self, command, read_resp = True ):
+    def send_command(self, command):
         """
         Send a command to the server:
 
@@ -190,7 +190,7 @@ class IMAP4(object):
             - tag: the tag used on the sent command;
             - response from the server to the sent command (only if read_resp);
         """
-        tag = self._new_tag()
+        tag = command.tag
         self._cmdque.append(command)
         self._tagref[tag] = command
 
@@ -203,32 +203,7 @@ class IMAP4(object):
                 self._transport.write(command.format(tag))
             except NotYet: pass
 
-        #TODO: figure out what to return
-
-
-
-        # Do not store the complete command on tagged_commands
-        if len(command) > MAXCOMLEN:
-            tagcommand = command[:MAXCOMLEN] + ' ...'
-        else:
-            tagcommand = command
-
-        # Check for a literal:
-        lt = send_literal_re.search(command)
-        if lt:
-            # If there are any additional command arguments, the literal octets
-            # are followed by a space and those arguments (from RFC3501 sec 7.5)
-            self.continuation_data.append(command[lt.end():])
-            command = command[:lt.end()-2]
-
-        # Send the command to the server
-        self.tagged_commands[tag] = tagcommand
-        self._transport.write('%s %s%s' % (tag, command, CRLF))
-
-        if read_resp:
-            return tag, self.read_responses(tag)
-        else:
-            return tag
+        return command
 
     def dummy_parse_command(self, tag, response):
         """Further processing of the server response.

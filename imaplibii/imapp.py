@@ -50,7 +50,7 @@ from utils import makeTagged, unquote, Internaldate2tuple, shrink_fetch_list
 from parsefetch import FetchParser
 import parselist
 from sexp import scan_sexp
-from imaplibii.errors import Error, Abort, ReadOnly
+from errors import Error, Abort, ReadOnly
 
 # Constants
 D_NOTPARSED = 8
@@ -532,7 +532,9 @@ class IMAP4P(object):
         except:
             self.push_continuation(authobject)
 
-        return self.processCommand( name, mech )
+        r = self.processCommand( name, mech )
+        print r
+        self.
 
     def capability(self):
         """Fetch capabilities list from server.

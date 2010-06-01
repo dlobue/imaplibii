@@ -10,7 +10,7 @@ from subprocess import PIPE, Popen
 from utils import min_ver_chk
 
 
-from imaplibii.errors import Error, Abort, ReadOnly
+from errors import Error, Abort, ReadOnly
 
 IMAP_PORT = 143    #: Default IMAP port
 IMAP_SSL_PORT = 993 #: Default IMAP SSL port

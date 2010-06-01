@@ -31,16 +31,35 @@
 # Global imports
 import time, datetime
 import re
+from weakref import ref
 from sys import exc_info
 from collections import deque
 from types import GeneratorType, FunctionType
 from email.header import decode_header
 from platform import python_version
-from imaplibii.errors import NotAvailable
+from functools import wraps
+from cPickle import dumps
+
+from errors import NotAvailable
 
 CRLF = '\r\n'
 
 # Utility functions
+def memoize(fctn):
+        memory = {}
+        @wraps(fctn)
+        def memo(*args,**kwargs):
+                haxh = dumps((args, sorted(kwargs.iteritems())))
+
+                if haxh not in memory:
+                        memory[haxh] = fctn(*args,**kwargs)
+
+                return memory[haxh]
+        if memo.__doc__:
+            memo.__doc__ = "\n".join([memo.__doc__,"This function is memoized."])
+        return memo
+
+
 def min_ver_chk(minver):
     """
     Ensure that the version of python running meets at least version `minver`.
@@ -315,6 +334,29 @@ def auth_ntlm(username, password, domain):
 
 # Classes
 
+class _blank(object):
+    __slots__ = ()
+    __repr__ = lambda self: 'Blank'
+    __str__ = lambda self: ''
+
+Blank = _blank()
+
+class section(dict):
+    __slots__ = ()
+    __str__ = lambda self: '[%s]' % ' '.join(('%s %s' % x for x in self.iteritems()))
+    format = __str__
+
+class imap_list(list):
+    __slots__ = ()
+    __str__ = lambda self: '(%s)' % ' '.join((x for x in self))
+    format = __str__
+
+def t(**terms):
+    cmd = '(%s)' % ' '.join(( '%s%s' % s for s in terms.iteritems())).upper()
+    return cmd
+
+
+
 
 class ContinuationRequests(deque):
     """
@@ -403,15 +445,28 @@ class ContinuationRequests(deque):
 
 
 class Command(object):
-    def __init__(self, cmd, *args, **kwargs):
+    def __init__(self, cmd, imap_session, *args, **kwargs):
         self.cmd = cmd
         self.args = args
         self.kwargs = kwargs
         self.continuation = None
-        self.finish = None
+        self.responses = []
+        self._imap_session = ref(imap_session)
+        self.tag = imap_session._new_tag()
 
-    def format(self, tag):
+    def format(self):
         if not self.args:
-            return ' '.join((tag, self.cmd, CRLF))
-        return ' '.join((tag, self.cmd, self.args, CRLF))
+            return ' '.join((self.tag, self.cmd, CRLF))
+        return ' '.join((self.tag, self.cmd, self.args, CRLF))
 
+    def iterresp(self):
+        i = 0
+        while 1:
+            try:
+                yield self.responses[i]
+                i += 1
+            except IndexError:
+                if (self.imap_session.state == self.tag and
+                     not self.responses):
+                        time.sleep(0.5)
+                else: break
