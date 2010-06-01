@@ -36,6 +36,7 @@ standard python IMAP client module) by Piers Lauder.
 
 # Global imports
 import socket, random, re, ssl
+import time
 from threading import Timer
 import pprint
 from subprocess import PIPE, Popen
@@ -61,6 +62,11 @@ CRLF = '\r\n'
 
 literal_re = re.compile('.*{(?P<size>\d+)}$')
 send_literal_re = re.compile('.*{(?P<size>\d+)}\r\n')
+
+t = time.time()
+fname = '/home/dominic/projects/offlineimap-pieces/imapsession-%s.log' % t
+fwname = '/home/dominic/projects/offlineimap-pieces/imapsession-commands-%s.log' % t
+
 
 class IMAP4(object):
     '''Bare bones IMAP client.
@@ -131,6 +137,10 @@ class IMAP4(object):
                         + self.tagpre
                         + r'\d+) (?P<type>[A-Z]+) (?P<data>.*)')
         self.tagnum = 0
+
+        self.f = open(fname, 'a')
+        self.w = open(fwname, 'a')
+        #self.f.write('text="""')
 
         self.tagged_commands = {}
         self.continuation_data = ContinuationRequests()
@@ -265,11 +275,14 @@ class IMAP4(object):
                 print 'S: Read %d bytes from the server.' % size
         #Use the abstracted _read method for consistancy.
         #return self._read(size, self.file)
-        return self.file.read(size)
+        r = self.file.read(size)
+        self.f.write(r)
+        return r
 
     def readline(self):
         '''Read line from remote.'''
         line = self.file.readline()
+        self.f.write(line)
         if not line:
             raise self.Abort('socket error: EOF')
         if __debug__:
@@ -282,6 +295,7 @@ class IMAP4(object):
         if __debug__:
             if Debug & D_CLIENT:
                 print 'C: %s' % data.replace(CRLF,'<cr><lf>')
+        self.w.write(data)
         try:
             self.sock.sendall(data)
         except (socket.error, OSError), val:
@@ -291,6 +305,8 @@ class IMAP4(object):
         '''Close I/O established in "open".'''
         self.file.close()
         self.sock.close()
+        #self.f.write('"""\n')
+        self.f.close()
 
     def socket(self):
         '''
