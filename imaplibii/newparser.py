@@ -177,6 +177,7 @@ def lexer_loop(self):
             if isinstance(parsed, need_more):
                 line = getattr(self.transport, parsed.transportmethod)(*parsed.args)
             else:
+                #self.parseque.append(results[0])
                 self.parseque.append(postparse(results[0]))
                 results = [[]]
                 break
@@ -201,7 +202,7 @@ class mockcontainer(object):
 
 # Response tag type containers
 untagged = namedtuple('untagged', 'tag type data')
-continuation = namedtuple('continuation', 'tag type data')
+continuation = namedtuple('continuation', 'tag data')
 tagged = namedtuple('tagged', 'tag type data')
 
 response_typemap = {
@@ -255,6 +256,9 @@ def postparse(sexp):
     isexp = iter(sexp)
     tag = isexp.next()
     tcontainer = get_resp_container(tag)
+    if tcontainer is continuation:
+        data = ' '.join(map(str, isexp))
+        return tcontainer(tag, data)
     rtype = isexp.next()
     if isinstance(rtype, int):
         #not the rtype, just an imposter
@@ -267,11 +271,11 @@ def postparse(sexp):
         r = tcontainer(tag, rtype, data=notice(data))
     else:
         dcontainer = get_resp_data_container(rtype)
-        if isinstance(dcontainer, list_item):
-            assert not data, 'Somewhere there already is data inside temp data container'
+        if dcontainer is list_item:
+            assert not data, 'Somehow there already is data inside temp data container'
             r = tcontainer(tag, rtype, data=dcontainer(*isexp))
-        elif isinstance(dcontainer, info):
-            assert not data, 'Somewhere there already is data inside temp data container'
+        elif dcontainer is info:
+            assert not data, 'Somehow there already is data inside temp data container'
             data = [isexp.next()]
             if not hasattr(data[0], '__iter__'):
                 readable = data.extend(isexp)
@@ -279,7 +283,7 @@ def postparse(sexp):
             else: readable = (x for x in isexp)
             try: readable = ' '.join(readable)
             except TypeError: pass
-            r = tcontainer(tag, rtype, data=dcontainer(ata=data, human_readable=readable))
+            r = tcontainer(tag, rtype, data=dcontainer(data=data, human_readable=readable))
         elif dcontainer is list:
             r = tcontainer(tag, rtype, data=dcontainer(isexp))
         else:
@@ -288,7 +292,8 @@ def postparse(sexp):
             imapmap = isexp.next()
             try:
                 t = isexp.next()
-                s = 'An empty iterable still had a value, wtf? %r' % t
+                t = ' '.join(map(str, sum([t], isexp)))
+                s = 'The sexp iterable should be empty, but still has values left?\nleft: %r\ntag: %s\nrtype: %s\n%r' % (t, tag, rtype, dcontainer)
                 raise ValueError(s)
             except StopIteration: pass
 
@@ -339,8 +344,8 @@ if __name__ == '__main__':
 
     print 'Test to the s-exp parser:'
     print
-    #tobj = mockcontainer(text)
-    tobj = mockcontainer('imapsession-1275238402.04.log', partial(open, mode='r'))
+    tobj = mockcontainer(text)
+    #tobj = mockcontainer('imapsession-1275238402.04.log', partial(open, mode='r'))
 
     print 'Non Recursive (%d times):' % itx
     a = time()
@@ -350,4 +355,5 @@ if __name__ == '__main__':
     print 1000 * (b-a) / itx, 'ms/iter'
     print itx, ' --> ', 1000 * (b-a) , 'ms'
     print
-    print tobj.parseque
+    #print tobj.parseque
+

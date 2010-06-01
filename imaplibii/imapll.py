@@ -67,7 +67,7 @@ literal_re = re.compile('.*{(?P<size>\d+)}$')
 send_literal_re = re.compile('.*{(?P<size>\d+)}\r\n')
 
 
-class IMAP4(object):
+class imap_client(object):
     """
     Bare bones IMAP client.
 
