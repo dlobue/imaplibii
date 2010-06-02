@@ -46,18 +46,18 @@ CRLF = '\r\n'
 
 # Utility functions
 def memoize(fctn):
-        memory = {}
-        @wraps(fctn)
-        def memo(*args,**kwargs):
-                haxh = dumps((args, sorted(kwargs.iteritems())))
+    memory = {}
+    @wraps(fctn)
+    def memo(*args,**kwargs):
+        haxh = dumps((args, sorted(kwargs.iteritems())))
 
-                if haxh not in memory:
-                        memory[haxh] = fctn(*args,**kwargs)
+        if haxh not in memory:
+            memory[haxh] = fctn(*args,**kwargs)
 
-                return memory[haxh]
-        if memo.__doc__:
-            memo.__doc__ = "\n".join([memo.__doc__,"This function is memoized."])
-        return memo
+        return memory[haxh]
+    if memo.__doc__:
+        memo.__doc__ = "\n".join([memo.__doc__,"This function is memoized."])
+    return memo
 
 
 def min_ver_chk(minver):
@@ -331,6 +331,26 @@ def auth_ntlm(username, password, domain):
     init = ntlm.create_NTLM_NEGOTIATE_MESSAGE(username)
     return init, response
 
+
+def autonext(f):
+    storage = []
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        def initgen():
+            del storage[:]
+            g = f(*args, **kwargs)
+            storage.append(g)
+            return g
+        assert not len(storage) > 1, "dity storage!"
+        try:
+            g = storage[0]
+            return g.send(*args, **kwargs)
+        except (IndexError, StopIteration):
+            g = initgen()
+            return g.next()
+    if wrapper.__doc__:
+        wrapper.__doc__ = "\n".join([wrapper.__doc__,"This generator function automatically returns its next value."])
+    return wrapper
 
 # Classes
 

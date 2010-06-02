@@ -167,39 +167,6 @@ def scan_sexp():
                 cur_result.append(atom)
 
 
-def lexer_loop(self):
-    results = [[]]
-    while 1:
-        line = self.transport.readline()
-        if not line: break
-        while 1:
-            parsed = self.parser.send((results, line))
-            if isinstance(parsed, need_more):
-                line = getattr(self.transport, parsed.transportmethod)(*parsed.args)
-            else:
-                #self.parseque.append(results[0])
-                self.parseque.append(postparse(results[0]))
-                results = [[]]
-                break
-
-
-class mockcontainer(object):
-
-    _do_work = lexer_loop
-
-    def do_work(self):
-        self.transport.seek(0)
-        self.parseque.clear()
-        self._do_work()
-
-    def __init__(self, s, transport=StringIO):
-        self.transport = transport(s)
-        self.parseque = deque()
-        self.parser = scan_sexp()
-        self.parser.next()
-
-
-
 # Response tag type containers
 untagged = namedtuple('untagged', 'tag type data')
 continuation = namedtuple('continuation', 'tag data')
@@ -329,6 +296,42 @@ _build_no_response_container = _build_ok_response_container
 _build_bad_response_container = _build_ok_response_container
 _build_bye_response_container = _build_ok_response_container
 
+
+
+def lexer_loop(self, container=False, earlyexit=False):
+    while 1:
+        results = [[]]
+        line = self.transport.readline()
+        if not line:
+            if earlyexit: break
+            continue
+        while 1:
+            parsed = self.preparse.send((results, line))
+            if isinstance(parsed, need_more):
+                line = getattr(self.transport, parsed.transportmethod)(*parsed.args)
+            else:
+                r = self.postparse(results[0])
+                if container is False:
+                    yield r
+                else: container.append(r)
+                break
+
+
+class mockcontainer(object):
+
+    _do_work = lexer_loop
+
+    def do_work(self):
+        self.transport.seek(0)
+        self.parseque.clear()
+        self._do_work(container=self.parseque, earlyexit=True)
+
+    def __init__(self, s, transport=StringIO, postparse=postparse):
+        self.transport = transport(s)
+        self.parseque = deque()
+        self.preparse = scan_sexp()
+        self.preparse.next()
+        self.postparse = staticmethod(postparse)
 
 
 if __name__ == '__main__':

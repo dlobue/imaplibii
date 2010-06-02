@@ -47,24 +47,16 @@ from threading import Lock
 
 # Local imports
 from utils import Int2AP, ContinuationRequests
+from parser import lexer_loop
+from response_handler import response_handler
 from errors import Error, Abort, ReadOnly, NotYet
 from imapcommands import COMMANDS, EXEMPT_CMDS, STATUS
 
 # Constants
 
-D_SERVER = 1        #: Debug responses from the server
-D_CLIENT = 2        #: Debug data sent by the client
-D_RESPONSE = 4      #: Debug obtained response
-
 Debug = 0
-#Debug = D_SERVER | D_CLIENT
-
-MAXCOMLEN = 48      #: Max command len to store on the tagged_commands dict
 
 CRLF = '\r\n'
-
-literal_re = re.compile('.*{(?P<size>\d+)}$')
-send_literal_re = re.compile('.*{(?P<size>\d+)}\r\n')
 
 
 class imap_client(object):
@@ -115,7 +107,7 @@ class imap_client(object):
         tag, response = M.send_command('LOGOUT' )
     """
 
-    def __init__(self, transport, parse_command=None):
+    def __init__(self, transport, response_handler=response_handler, threaded=False):
         # Create unique tag for this session,
         # and compile tagged response matcher.
         self.tagpre = Int2AP(random.randint(4096, 65535))
@@ -124,18 +116,19 @@ class imap_client(object):
                         + r'\d+) (?P<type>[A-Z]+) (?P<data>.*)')
         self.tagnum = 0
 
-        self.tagged_commands = {}
-        self.continuation_data = ContinuationRequests()
-
+        self._response_runner = None
         self._state = deque(maxlen=3)
         self._state_lock = Lock()
         self._cmdque = deque()
         self._tagref = WeakValueDictionary()
 
-        if parse_command:
-            self.parse_command = parse_command
+        if threaded:
+            self._dispatchque = deque()
         else:
-            self.parse_command = self.dummy_parse_command
+            self._dispatchque = False
+
+        self.response_handler = response_handler(self)
+
 
         # Connection to the server
         self._transport = transport
@@ -156,19 +149,16 @@ class imap_client(object):
     _state_del = lambda x: x._state.pop()
     state = property(_state_get, _state_set, _state_del, "This is the state property.")
 
+    _get_response = lexer_loop
+
+    def get_response(self):
+        if self._response_runner is None:
+            self._response_runner = self._get_response(container=self._dispatchque)
+
+        response = self._dispatchque.popleft()
+        self.response_handler(response)
 
 
-    def push_continuation( self, obj ):
-        """
-        Insert a continuation in the continuation queue.
-
-        :param obj: this parameter can be either a string, or a callable. If
-        it's a string it will be poped unmodified when the next continuation
-        is requested by the server. If it's a callable, the return from the
-        callable will be sent to the server. The callable is called using the
-        continuation data as argument.
-        """
-        self.continuation_data.append( obj )
 
     # SEND/RECEIVE commands from the server
 
@@ -205,211 +195,14 @@ class imap_client(object):
 
         return command
 
-    def dummy_parse_command(self, tag, response):
-        """Further processing of the server response.
-        This method is called by `read_responses`.
-
-        @param tag: the tag used on the command.
-        @param response: a server response on the format::
-
-            response = { 'tagged' : {TAG001:{ 'status': ..., 'message': ...,
-                         'command': ... }, ... },
-                     'untagged' : [ '* 1st untagged', '* 2nd untagged', ... ] }
-
-        @return: Since this is an abstract method, it only returns the fed
-        response, unmodified.
-        """
-        return response
-
     def _new_tag(self):
         """Returns a new tag."""
         tag = '%s%03d' % (self.tagpre, self.tagnum)
         self.tagnum += 1
         return tag
 
-    #TODO: redo the following methods
 
-    def _get_line(self):
-        """Gets a line from the server. If the line contains a literal in it,
-        it will recurse until we have read a complete line.
-        """
-        # Read a line from the server
-        line = self._transport.readline()[:-2]
 
-        # Verify if a literal is comming
-        lt = literal_re.match(line)
-        if lt:
-            # read 'size' bytes from the server and append them to
-            # the line read and read the rest of the line
-            size = int(lt.group('size'))
-            literal = self._transport.read(size)
-            line += CRLF + literal + self._get_line()
-
-        return line
-
-    def _get_response(self):
-        """
-        This method is called from within `read_responses`,
-        it serves the purpose of making a broad classification of the server
-        responses. The possibilities are:
-
-            - It's a tagged response, the response will be encapsulated on a
-              dict;
-            - It's an untagged response, we return a string;
-            - It's a continuation request, '+ <continuation data>CRLF', a
-              continaution response will be poped from the continuation queue.
-              If we don't have a prepared continuation, we'll try to cancel the
-              command by sending a '*'.
-        """
-        # Read a line from the server
-        line = self._get_line()
-
-        # Verify whether it's a tagged or untagged response:
-        tg = self.tagre.match(line)
-        if tg:
-            # It's tagged
-            tag = tg.group('tag')
-            if not tag in self.tagged_commands:
-                raise Abort('unexpected tagged response: %s' % line)
-            type = tg.group('type')
-            data = tg.group('data')
-            response = { 'status': type, 'message': data,
-                         'tag': tag,
-                         'command': self.tagged_commands[tag] }
-            del self.tagged_commands[tag]
-            return response
-        elif self.state == 'IDLE':
-            return line
-        elif line[:2] == '* ':
-            # It's untagged
-            return line
-        elif line[:2] == '+ ' or line == '+':
-            # It's a continuation, we're sending a literal
-            self._transport.write( self.continuation_data.send(line[2:]) + CRLF )
-            return None
-        else:
-            raise Abort('What now??? What\'s this:\nS: %s' % line)
-
-    def _idle_dispatch(self, response):
-        try:
-            return self.idle_dispatch(response)
-        finally:
-            response['tagged'].clear()
-            del response['untagged'][:]
-
-    def idle_dispatch(self, response):
-        #TODO: replace the print statements below with NotImplemented exception.
-        print 'Not implemented!'
-        print '(got %s response tho, btw)' % str(response)
-
-    def _read_resp_loop(self, response):
-        """
-        Modified read_responses loop meant for IDLE.
-
-        The idea is to keep reading data from the server until we know we
-        have all of the data that was requested by our last command.
-        
-        The problem with this is it doesn't quite work for IDLE notification.
-        We want updates from IDLE to go into the dispatcher NOW, not 30 minutes
-        later when we end IDLE mode.
-        """
-        data_release = None
-        resp_buffer = { 'tagged' : {},
-                        'untagged' : [] }
-
-        while self.tagged_commands:
-            # If we have responses to read we should get them
-            # from the server up until there are no more responses
-            resp = self._get_response()
-
-            # This little gem is necessary for Exchange.
-            # Unlike sane imap servers like Gmail, when something
-            # is done to cause an IDLE notification to go off
-            # Exchange isn't satisified with sending out just one
-            # message, no! It has to send out 5 :(
-            if self.state == 'IDLE':
-                try: data_release.cancel()
-                except AttributeError:
-                    pass #quack!
-
-            resp_buffer = self._build_read_resp(resp, resp_buffer)
-
-            if self.state == 'IDLE':
-                data_release = Timer(3, self._idle_dispatch, (resp_buffer,))
-                            #TODO: may be interesting to do heuristics one day
-                            # on the timer value so it can change to suit its env.
-                data_release.start()
-
-        response = resp_buffer
-        return response
-
-    def _read_resp_loop1(self, loop_cond_chk, response):
-        """
-        Generic read_responses loop.
-        """
-        while loop_cond_chk:
-            # If we have responses to read we should get them
-            # from the server up until there are no more responses
-            resp = self._get_response()
-            response = self._build_read_resp(resp, response)
-
-        return response
-
-    def _build_read_resp(self, resp, response):
-        if isinstance(resp,str):
-            response['untagged'].append(resp)
-        elif isinstance(resp,dict):
-            # A tagged response is dict formated
-            response['tagged'][resp['tag']] = resp
-        elif resp == None:
-            # We've sent a continuation
-            pass
-        else:
-            raise Error('Unknown response:\n%s' % resp)
-        return response
-
-    def read_responses(self, tag):
-        """
-        Reads the responses from the server.
-
-        The rules followed are:
-
-            - If the line starts with a "*" + SP it's an untagged response;
-            - If the line ends with {<number>}CRLF it's an IMAP literal and
-              on the same iteration of the loop the next <number> bytes from the
-              server will be read;
-            - If the line starts with '<tag> + SP' it's the end on a tagged
-              response.
-
-        The returned data is in the form::
-
-            response = { 'tagged' : {TAG001:{ 'status': ..., 'message': ...,
-                         'command': ... }, ... },
-                     'untagged' : [ '* 1st untagged', '* 2nd untagged', ... ] }
-
-        @param tag: the tag to read the response for. Please note that due the
-        IMAP characteristics we can't predict the server response order. Because
-        of this, it's possible to have in a single response severall tagged
-        responses besides the tag we are asking the response for. In any case
-        this method will stop reading from the server as soon as it has read the
-        tagged response for the tag parameter.
-
-        @return: Returns the server response filtred by
-        `parse_command`.
-        """
-        response = { 'tagged' : {},
-                     'untagged' : [] }
-
-        response = self._read_resp_loop(response)
-
-        assert not self.continuation_data, "still have leftover continuation data"
-
-        logging.debug(response)
-        if __debug__:
-            if Debug & D_RESPONSE:
-                print response
-
-        return self.parse_command(tag, response)
 
 
 
