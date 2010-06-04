@@ -9,3 +9,5 @@ class ReadOnly(Exception):
     """Mailbox status changed to READ-ONLY"""
 
 class NotAvailable(Exception): pass
+
+class ValueMissing(Exception): pass

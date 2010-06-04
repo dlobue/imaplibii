@@ -31,16 +31,16 @@
 # Global imports
 import time, datetime
 import re
-from weakref import ref
+from weakref import proxy
 from sys import exc_info
-from collections import deque
+from collections import deque, Iterable
 from types import GeneratorType, FunctionType
 from email.header import decode_header
 from platform import python_version
 from functools import wraps
 from cPickle import dumps
 
-from errors import NotAvailable
+from errors import NotAvailable, ValueMissing
 
 CRLF = '\r\n'
 
@@ -378,7 +378,7 @@ def t(**terms):
 
 
 
-class ContinuationRequests(deque):
+class continuations(deque):
     """
     Class to be used with the continuation requests made by the server.
     This is a deque for efficient append/pop operations on either side.
@@ -386,6 +386,10 @@ class ContinuationRequests(deque):
     Use the next method to get the next response in line.
 
     """
+    def __init__(self, *args):
+        deque.__init__(self)
+        self.put(args)
+
     def send(self, arg):
         return self._cointeract('send', arg)
 
@@ -398,7 +402,12 @@ class ContinuationRequests(deque):
     send.__doc__ = GeneratorType.send.__doc__
     next.__doc__ = GeneratorType.next.__doc__
     throw.__doc__ = GeneratorType.throw.__doc__
-    put = deque.append
+
+    def put(self, item):
+        if type(item) is not GeneratorType and isinstance(item, Iterable):
+            map(self.put, item)
+        elif item is not None:
+            self.append(item)
 
     def _cointeract(self, action, *args, **kwargs):
         """
@@ -464,29 +473,70 @@ class ContinuationRequests(deque):
 
 
 
-class Command(object):
-    def __init__(self, cmd, imap_session, *args, **kwargs):
+class command(object):
+    def __init__(self, cmd, args, continuation=None, **kwargs):
         self.cmd = cmd
         self.args = args
         self.kwargs = kwargs
-        self.continuation = None
-        self.responses = []
-        self._imap_session = ref(imap_session)
-        self.tag = imap_session._new_tag()
+        self.continuation = continuations(continuation)
 
-    def format(self):
+
+    def format(self, imap_session):
+        self.tag = imap_session._new_tag()
+        self.responses = responses(imap_session, self.tag)
+
         if not self.args:
             return ' '.join((self.tag, self.cmd, CRLF))
         return ' '.join((self.tag, self.cmd, self.args, CRLF))
 
-    def iterresp(self):
+
+
+class responses(list):
+    """
+    Container for all the responses returned from the imap server pertaining
+    to one command.
+    """
+    __slots__ = ('_imap_session', 'tag', '_index')
+
+    def __init__(self, imap_session, tag):
+        self._imap_session = proxy(imap_session)
+        self.tag = tag
+        self._index = None
+        list.__init__(self)
+
+    def next(self):
+        """
+        Simulates a generator's next method for use in non-blocking iteration.
+
+        Raises ValueMissing if it runs out of values, but the imap session's
+        state indicates more responses may yet still be inbound.
+        """
+        if self._index is None:
+            self._index = 0
+        try:
+            r = self[self._index]
+            self._index += 1
+            return r
+        except IndexError:
+            if self._imap_session.state == self.tag:
+                raise ValueMissing(("Still waiting on IMAP server for more"
+                                        "responses. Try again."))
+            else:
+                self._index = None
+                raise StopIteration("No more values.")
+
+    def __iter__(self):
+        """
+        Blocking iterator; allows iteration over all IMAP responses, even if
+        they aren't all in yet.
+        """
         i = 0
         while 1:
             try:
-                yield self.responses[i]
+                yield self[i]
                 i += 1
             except IndexError:
-                if (self.imap_session.state == self.tag and
-                     not self.responses):
-                        time.sleep(0.5)
+                if self.imap_session.state == self.tag:
+                        time.sleep(0.1)
                 else: break
+
