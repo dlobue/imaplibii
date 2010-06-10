@@ -51,6 +51,7 @@ from parser import lexer_loop
 from response_handler import response_handler
 from errors import Error, Abort, ReadOnly, NotYet
 from imapcommands import COMMANDS, EXEMPT_CMDS, STATUS
+from imapcommands import AUTH, NONAUTH, SELECTED, LOGOUT
 
 # Constants
 
@@ -111,9 +112,6 @@ class imap_client(object):
         # Create unique tag for this session,
         # and compile tagged response matcher.
         self.tagpre = Int2AP(random.randint(4096, 65535))
-        self.tagre = re.compile(r'(?P<tag>'
-                        + self.tagpre
-                        + r'\d+) (?P<type>[A-Z]+) (?P<data>.*)')
         self.tagnum = 0
 
         self._response_runner = None
@@ -121,6 +119,7 @@ class imap_client(object):
         self._state_lock = Lock()
         self._cmdque = deque()
         self._tagref = WeakValueDictionary()
+        self.state = LOGOUT
 
         if threaded:
             self._dispatchque = deque()

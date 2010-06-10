@@ -16,6 +16,11 @@ IMAP_PORT = 143    #: Default IMAP port
 IMAP_SSL_PORT = 993 #: Default IMAP SSL port
 CRLF = '\r\n'
 
+#Transport states
+CLOSED = 0
+OPEN = 1
+SECURE = 2
+
 # If python version is not at least 2.5.3 then use the included compatability
 # read method to prevent an obscure memory leak on some systems.
 if min_ver_chk([2,5,3]):
@@ -25,11 +30,21 @@ else:
 
 
 class stream(object):
-    def __na(self):
-        raise NotImplemented
+    def __init__(self):
+        self.state = CLOSED
 
     def close(self):
-        return self._close()
+        logging.debug('Closing connection')
+        try: return self._close()
+        finally: self.state = CLOSED
+
+    def open(self, *args):
+        e = 'Opening connection to IMAP server on %s transport' %\
+            self.__class__.__name__
+        logging.info(e)
+        r = self._open(*args)
+        self.state = OPEN
+        return r
 
     def read(self, size=-1):
         logging.debug('S: Read %d bytes from the server.' % size)
@@ -53,11 +68,11 @@ class stream(object):
     readline.__doc__ = file.readline.__doc__
     write.__doc__ = file.write.__doc__
 
-class tcp_stream(stream):
-    def __init__(self, host, port=IMAP_PORT):
-        self.sock = self._open(host, port)
-        self.file = self.sock.makefile('rb')
 
+class tcp_stream(stream):
+    def _open(self, host, port=IMAP_PORT):
+        self.sock = self._open_socket(host, port)
+        self.file = self.sock.makefile('rb')
 
     def _check_socket_alive(self, sock=None):
         """
@@ -68,7 +83,6 @@ class tcp_stream(stream):
 
         r = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
         assert r is 0
-
 
     def _set_sock_keepalive(self, sock=None):
         """
@@ -90,8 +104,7 @@ class tcp_stream(stream):
         sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 2)
         return sock
 
-
-    def _open(self, host, port):
+    def _open_socket(self, host, port):
         resolv = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
                                    socket.SOCK_STREAM)
 
@@ -111,7 +124,6 @@ class tcp_stream(stream):
             raise socket.error(last_error)
 
         return sock
-
 
     def _compat_read(self, size, read_from):
         """
@@ -137,7 +149,6 @@ class tcp_stream(stream):
 
         return io.getvalue()
 
-
     def _read(self, size):
         if REQ_COMPAT_READ:
             #malloc bug present in python prior to 2.5.3.
@@ -145,13 +156,11 @@ class tcp_stream(stream):
         else:
             return self.file.read(size)
 
-
     def _readline(self):
         line = self.file.readline()
         if not line:
             raise Abort('socket error: EOF')
         return line
-
 
     def _write(self, data):
         try:
@@ -159,11 +168,9 @@ class tcp_stream(stream):
         except (socket.error, OSError), val:
             Abort('socket error: %s' % val)
 
-
     def _close(self):
         self.file.close()
         self.sock.close()
-
 
 
 class ssl_stream(tcp_stream):
@@ -177,25 +184,26 @@ class ssl_stream(tcp_stream):
             keyfile - PEM formatted file that contains your private key (default: None);
             certfile - PEM formatted certificate chain file (default: None);
     """
-    def __init__(self, host, port=IMAP_SSL_PORT, keyfile=None, certfile=None,
+    def _open(self, host, port=IMAP_SSL_PORT, keyfile=None, certfile=None,
              ssl_version=ssl.PROTOCOL_SSLv3, do_handshake_on_connect=True):
-        self.sock = ssl.wrap_socket(self._open(host, port), keyfile=keyfile,
+        self.sock = ssl.wrap_socket(self._open_socket(host, port), keyfile=keyfile,
                                     certfile=certfile, ssl_version=ssl_version,
                                     do_handshake_on_connect=do_handshake_on_connect)
+        if do_handshake_on_connect:
+            self.state = SECURE
         self.file = self.sock.makefile('rb')
 
-
     def do_handshake(self):
-        self.sock.do_handshake()
-
+        if self.state is OPEN:
+            self.sock.do_handshake()
+            self.state = SECURE
 
     def unwrap(self):
-        self.sock.unwrap()
-
+        try: self.sock.unwrap()
+        finally: self.state = OPEN
 
     do_handshake.__doc__ = ssl.SSLSocket.do_handshake.__doc__
     unwrap.__doc__ = ssl.SSLSocket.unwrap.__doc__
-
 
 
 class process_stream(stream):
