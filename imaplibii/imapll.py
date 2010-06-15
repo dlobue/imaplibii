@@ -40,14 +40,14 @@ by the server.
 import random
 import re
 import logging
-from threading import Timer
+from threading import Timer, Thread
 from collections import deque
 from weakref import WeakValueDictionary
 from threading import Lock
 
 # Local imports
 from utils import Int2AP, ContinuationRequests
-from parser import lexer_loop
+from parser import lexer_loop, scan_sexp, postparse
 from response_handler import response_handler
 from errors import Error, Abort, ReadOnly, NotYet
 from imapcommands import COMMANDS, EXEMPT_CMDS, STATUS
@@ -114,6 +114,10 @@ class imap_client(object):
         self.tagpre = Int2AP(random.randint(4096, 65535))
         self.tagnum = 0
 
+        self.preparse = scan_sexp()
+        self.preparse.next()
+        self.postparse = staticmethod(postparse)
+
         self._response_runner = None
         self._state = deque(maxlen=3)
         self._state_lock = Lock()
@@ -148,14 +152,21 @@ class imap_client(object):
     _state_del = lambda x: x._state.pop()
     state = property(_state_get, _state_set, _state_del, "This is the state property.")
 
+    def _init_lexer_loop(self, container=False):
+        t = Thread(target=lexer_loop, args=(self,), kwargs={'container':container})
+        t.daemon = True
+        t.start()
+        return t
+
     _get_response = lexer_loop
 
     def get_response(self):
         if self._response_runner is None:
-            self._response_runner = self._get_response(container=self._dispatchque)
+            self._response_runner = self._init_lexer_loop(container=self._dispatchque)
+            #self._response_runner = self._get_response(container=self._dispatchque)
 
         response = self._dispatchque.popleft()
-        self.response_handler(response)
+        return self.response_handler(response)
 
 
 
@@ -216,8 +227,6 @@ if __name__ == '__main__':
         optlist, args = getopt.getopt(sys.argv[1:], 'd:s:')
     except getopt.error, val:
         optlist, args = (), ()
-
-    Debug = D_SERVER | D_CLIENT | D_RESPONSE
 
     if not args: args = ('',)
 
