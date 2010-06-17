@@ -37,6 +37,7 @@ class response_handler(object):
         with self._imapll._state_lock:
             if self._imapll.state is LOGOUT:
                 self._imapll.state = NONAUTH
+                self._imapll.welcome = response
 
 
     def untagged_no(self, response):
@@ -62,6 +63,7 @@ class response_handler(object):
         with self._imapll._state_lock:
             if self._imapll.state is LOGOUT:
                 self._imapll.state = AUTH
+                self._imapll.welcome = response
 
     def tagged_ok(self, response):
         with self._imapll._state_lock:

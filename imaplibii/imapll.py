@@ -46,7 +46,7 @@ from weakref import WeakValueDictionary
 from threading import Lock
 
 # Local imports
-from utils import Int2AP, ContinuationRequests
+from utils import Int2AP, command
 from parser import lexer_loop, scan_sexp, postparse
 from response_handler import response_handler
 from errors import Error, Abort, ReadOnly, NotYet
@@ -60,7 +60,7 @@ Debug = 0
 CRLF = '\r\n'
 
 
-class imap_client(object):
+class imapll(object):
     """
     Bare bones IMAP client.
 
@@ -108,7 +108,7 @@ class imap_client(object):
         tag, response = M.send_command('LOGOUT' )
     """
 
-    def __init__(self, transport, response_handler=response_handler, threaded=False):
+    def __init__(self, transport, response_handler=response_handler):
         # Create unique tag for this session,
         # and compile tagged response matcher.
         self.tagpre = Int2AP(random.randint(4096, 65535))
@@ -125,16 +125,14 @@ class imap_client(object):
         self._tagref = WeakValueDictionary()
         self.state = LOGOUT
 
-        if threaded:
-            self._dispatchque = deque()
-        else:
-            self._dispatchque = False
 
         self.response_handler = response_handler(self)
 
 
         # Connection to the server
-        self._transport = transport
+        self.transport = transport
+
+
 
         self.welcome = self._get_response()
 
@@ -152,15 +150,27 @@ class imap_client(object):
     _state_del = lambda x: x._state.pop()
     state = property(_state_get, _state_set, _state_del, "This is the state property.")
 
+    _get_response = lexer_loop
+
+    def get_response(self):
+        if self._response_runner is None:
+            self._response_runner = self._get_response()
+
+        try:
+            return self._response_runner.next()
+        except StopIteration:
+            self._response_runner = None
+            raise Error
+
+
+
     def _init_lexer_loop(self, container=False):
         t = Thread(target=lexer_loop, args=(self,), kwargs={'container':container})
         t.daemon = True
         t.start()
         return t
 
-    _get_response = lexer_loop
-
-    def get_response(self):
+    def _get_response2(self):
         if self._response_runner is None:
             self._response_runner = self._init_lexer_loop(container=self._dispatchque)
             #self._response_runner = self._get_response(container=self._dispatchque)
@@ -190,26 +200,292 @@ class imap_client(object):
             - tag: the tag used on the sent command;
             - response from the server to the sent command (only if read_resp);
         """
-        tag = command.tag
         self._cmdque.append(command)
-        self._tagref[tag] = command
 
         with self._state_lock:
-            try:
-                if self.state in COMMANDS[command.cmd]:
-                    self.state = tag
-                elif command.cmd not in EXEMPT_CMDS:
-                    raise NotYet
-                self._transport.write(command.format(tag))
-            except NotYet: pass
+            if (self.state not in COMMANDS[command.cmd] and
+                    command.cmd not in EXEMPT_CMDS):
+                return
+            cmd = command.format(self)
+            tag = command.tag
+            self._tagref[tag] = command
+            self.state = tag
+            self._transport.write(cmd)
 
-        return command
+        return command.responses
 
     def _new_tag(self):
         """Returns a new tag."""
         tag = '%s%03d' % (self.tagpre, self.tagnum)
         self.tagnum += 1
         return tag
+
+
+
+class imap_client(imapll):
+
+
+    # Any State
+
+    def capability(self):
+        """
+      The CAPABILITY command requests a listing of capabilities that the
+      server supports.
+        """
+        cmd = 'capability'
+        return command(cmd)
+
+    def logout(self):
+        """
+      The LOGOUT command informs the server that the client is done with
+      the connection.
+        """
+        cmd = 'logout'
+        return command(cmd)
+
+    def noop(self):
+        """
+      The NOOP command always succeeds.  It does nothing.
+        """
+        cmd = 'noop'
+        return command(cmd)
+
+    
+    # Not Authenticated State
+
+    def authenticate(self, auth_type, auth_handler):
+        """
+      The AUTHENTICATE command indicates a [SASL] authentication
+      mechanism to the server.  If the server supports the requested
+      authentication mechanism, it performs an authentication protocol
+      exchange to authenticate and identify the client.  It MAY also
+      negotiate an OPTIONAL security layer for subsequent protocol
+      interactions.
+        """
+        cmd = 'authenticate'
+        return command(cmd, auth_type, continuation=auth_handler)
+
+    def login(self, username, password):
+        """
+      The LOGIN command identifies the client to the server and carries
+      the plaintext password authenticating this user.
+        """
+        cmd = 'login'
+        args = '%s %s' % (username, password)
+        return command(cmd, args)
+
+    def starttls(self):
+        """
+        """
+        cmd = 'starttls'
+        return command(cmd)
+
+    
+    # Authenticated State
+
+    def append(self, mailbox, message, flags=(), date=None):
+        """
+          The APPEND command appends the literal argument as a new message
+          to the end of the specified destination mailbox.
+        """
+        cmd = 'append'
+        size = len(message)
+        flags = ' '.join(flags)
+        date = (date and ' "%s"' % date) or ''
+        args = '%s (%s)%s {%i}' % (mailbox, flags, date, size)
+        return command(cmd, args, continuation=message)
+
+    def status(self, mailbox, messages=False, recent=False, uidnext=False,
+                uidvalidity=False, unseen=False):
+        """
+          The STATUS command requests the status of the indicated mailbox.
+          It does not change the currently selected mailbox, nor does it
+          affect the state of any messages in the queried mailbox (in
+          particular, STATUS MUST NOT cause messages to lose the \Recent
+          flag).
+        """
+        cmd = 'status'
+        kwargs = {'messages': messages,
+                  'recent': recent,
+                  'uidnext': uidnext,
+                  'uidvalidity': uidvalidity,
+                  'unseen': unseen}
+        kwargs = ( k for k,v in kwargs if v is True )
+        args = '%s (%s)' % (mailbox, ' '.join(kwargs))
+        return command(cmd, args)
+
+    def list(self, reference="", mailbox=""):
+        """
+          The LIST command returns a subset of names from the complete set
+          of all names available to the client.  Zero or more untagged LIST
+          replies are returned, containing the name attributes, hierarchy
+          delimiter, and name; see the description of the LIST reply for
+          more detail.
+        """
+        cmd = 'list'
+        args = '"%s" "%s"' % (reference, mailbox)
+        return command(cmd, args)
+
+    def lsub(self, reference="", mailbox=""):
+        """
+          The LSUB command returns a subset of names from the set of names
+          that the user has declared as being "active" or "subscribed".
+          Zero or more untagged LSUB replies are returned.
+        """
+        cmd = 'lsub'
+        args = '"%s" "%s"' % (reference, mailbox)
+        return command(cmd, args)
+
+    def rename(self, oldname, newname):
+        """
+      The RENAME command changes the name of a mailbox.  A tagged OK
+      response is returned only if the mailbox has been renamed.  It is
+      an error to attempt to rename from a mailbox name that does not
+      exist or to a mailbox name that already exists.
+        """
+        cmd = 'rename'
+        args = '"%s" "%s"' % (oldname, newname)
+        return command(cmd, args)
+
+    def select(self, mailbox):
+        """
+      The SELECT command selects a mailbox so that messages in the
+      mailbox can be accessed. 
+        """
+        cmd = 'select'
+        return command(cmd, mailbox)
+
+    def examine(self, mailbox):
+        """
+      The EXAMINE command is identical to SELECT and returns the same
+      output; however, the selected mailbox is identified as read-only.
+      No changes to the permanent state of the mailbox, including
+      per-user state, are permitted; in particular, EXAMINE MUST NOT
+      cause messages to lose the \Recent flag.
+        """
+        cmd = 'examine'
+        return command(cmd, mailbox)
+
+    def create(self, mailbox):
+        """
+      The CREATE command creates a mailbox with the given name.  An OK
+      response is returned only if a new mailbox with that name has been
+      created.  It is an error to attempt to create INBOX or a mailbox
+      with a name that refers to an extant mailbox.
+        """
+        cmd = 'create'
+        return command(cmd, mailbox)
+
+    def delete(self, mailbox):
+        """
+      The DELETE command permanently removes the mailbox with the given
+      name.  A tagged OK response is returned only if the mailbox has
+      been deleted.  It is an error to attempt to delete INBOX or a
+      mailbox name that does not exist.
+        """
+        cmd = 'delete'
+        return command(cmd, mailbox)
+
+    def subscribe(self, mailbox):
+        """
+      The SUBSCRIBE command adds the specified mailbox name to the
+      server's set of "active" or "subscribed" mailboxes as returned by
+      the LSUB command.
+        """
+        cmd = 'subscribe'
+        return command(cmd, mailbox)
+
+    def unsubscribe(self, mailbox):
+        """
+      The UNSUBSCRIBE command removes the specified mailbox name from
+      the server's set of "active" or "subscribed" mailboxes as returned
+      by the LSUB command.
+        """
+        cmd = 'unsubscribe'
+        return command(cmd, mailbox)
+
+
+    # Selected State
+
+    def check(self):
+        """
+          The CHECK command requests a checkpoint of the currently selected
+          mailbox.  A checkpoint refers to any implementation-dependent
+          housekeeping associated with the mailbox (e.g., resolving the
+          server's in-memory state of the mailbox with the state on its
+          disk) that is not normally executed as part of each command.
+        """
+        cmd = 'check'
+        return command(cmd)
+
+    def close(self):
+        """
+          The CLOSE command permanently removes all messages that have the
+          \Deleted flag set from the currently selected mailbox, and returns
+          to the authenticated state from the selected state.
+        """
+        cmd = 'close'
+        return command(cmd)
+
+    def expunge(self):
+        """
+          The EXPUNGE command permanently removes all messages that have the
+          \Deleted flag set from the currently selected mailbox.
+        """
+        cmd = 'expunge'
+        return command(cmd)
+
+    def search(self, *args):
+        """
+          The SEARCH command searches the mailbox for messages that match
+          the given searching criteria.  Searching criteria consist of one
+          or more search keys.
+        """
+        cmd = 'search'
+        args = ' '.join(args)
+        return command(cmd, args)
+
+    def store(self, messages, flags=(), modify=None, verbose=False, use_uid=False):
+        """
+          The STORE command alters data associated with a message in the
+          mailbox.  Normally, STORE will return the updated value of the
+          data with an untagged FETCH response.  A suffix of ".SILENT" in
+          the data item name prevents the untagged FETCH, and the server
+          SHOULD assume that the client has determined the updated value
+          itself or does not care about the updated value.
+        """
+        cmd = 'store'
+        cmd = use_uid and 'uid %s' % cmd or cmd
+        v = verbose and '' or '.silent'
+        if modify is True: m = '+'
+        elif modify is False: m = '-'
+        else: m = ''
+        flags = ' '.join(flags)
+        args = '%s %sflags%s (%s)' % (messages, m, v, flags)
+        return command(cmd, args)
+
+    def _fetch(self, messages, use_uid=False, **terms):
+        """
+          The FETCH command retrieves data associated with a message in the
+          mailbox.  The data items to be fetched can be either a single atom
+          or a parenthesized list.
+        """
+        cmd = 'fetch'
+        cmd = use_uid and 'uid %s' % cmd or cmd
+        args = '(%s)' % ' '.join(( '%s%s' % s for s in terms.iteritems())).upper()
+        return command(cmd, args)
+
+    def copy(self, messages, folder, use_uid=False):
+        """
+          The COPY command copies the specified message(s) to the end of the
+          specified destination mailbox.  The flags and internal date of the
+          message(s) SHOULD be preserved, and the Recent flag SHOULD be set,
+          in the copy.
+        """
+        cmd = 'copy'
+        cmd = use_uid and 'uid %s' % cmd or cmd
+        args = '%s %s' % (messages, folder)
+        return command(cmd, args)
 
 
 
@@ -235,7 +511,7 @@ if __name__ == '__main__':
     USER = 'dom.lobue@gmail.com'
     PASSWD = getpass.getpass("IMAP password for %s on %s: " % (USER, host))
 
-    M = IMAP4( ssl_stream( host ) )
+    M = imapll( ssl_stream( host ) )
 
     M.send_command('LOGIN %s "%s"' % (USER, PASSWD))
 

@@ -474,11 +474,13 @@ class continuations(deque):
 
 
 class command(object):
-    def __init__(self, cmd, args, continuation=None, **kwargs):
+    def __init__(self, cmd, args=None, continuation=None, **kwargs):
         self.cmd = cmd
         self.args = args
         self.kwargs = kwargs
         self.continuation = continuations(continuation)
+        self.tag = None
+        self.responses = None
 
 
     def format(self, imap_session):
