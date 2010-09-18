@@ -233,7 +233,7 @@ def postparse(sexp):
         rtype = isexp.next()
     rtype = rtype.lower()
 
-    if len(sexp) is 3 and data:
+    if len(sexp) is 3 and data is not None:
         #it is a notice response. ex: * 1 exists
         r = tcontainer(tag, rtype, data=notice(data))
     else:
@@ -243,13 +243,24 @@ def postparse(sexp):
             r = tcontainer(tag, rtype, data=dcontainer(*isexp))
         elif dcontainer is info:
             assert not data, 'Somehow there already is data inside temp data container'
+            readable = None
             data = [isexp.next()]
             if not hasattr(data[0], '__iter__'):
-                readable = data.extend(isexp)
+                data.extend(isexp)
+                readable = data
                 data = None
-            else: readable = (x for x in isexp)
-            try: readable = ' '.join(readable)
-            except TypeError: pass
+            else:
+                readable = (x for x in isexp)
+                if len(data) == 1 and type(data[0]) is list:
+                    data = data[0]
+                if type(data[0]) is str and (len(data) == 1 or (
+                    len(data) == 2 and type(data[1]) in (list, int)) and
+                    not ( data[0].startswith('\\') or data[0].isdigit())):
+                    print('making %s lower' % data[0])
+                    data[0] = data[0].lower()
+            if readable is not None:
+                readable = ' '.join(readable)
+
             r = tcontainer(tag, rtype, data=dcontainer(data=data, human_readable=readable))
         elif dcontainer is list:
             r = tcontainer(tag, rtype, data=dcontainer(isexp))
@@ -297,13 +308,17 @@ _build_bad_response_container = _build_ok_response_container
 _build_bye_response_container = _build_ok_response_container
 
 
-
 def lexer_loop(self, container=False, earlyexit=False):
+    try:
+        rh = self.response_handler
+    except AttributeError:
+        rh = None
     while 1:
         results = [[]]
         line = self.transport.readline()
         if not line:
             if earlyexit: break
+            if container is False: yield
             continue
         while 1:
             parsed = self.preparse.send((results, line))
@@ -311,7 +326,9 @@ def lexer_loop(self, container=False, earlyexit=False):
                 line = getattr(self.transport, parsed.transportmethod)(*parsed.args)
             else:
                 r = self.postparse(results[0])
-                if container is False:
+                if rh is not None:
+                    r = rh(r)
+                elif container is False:
                     yield r
                 else: container.append(r)
                 break
@@ -319,7 +336,16 @@ def lexer_loop(self, container=False, earlyexit=False):
 
 class mockcontainer(object):
 
-    _do_work = lexer_loop
+    __do_work = lexer_loop
+
+    def _do_work(self, *args, **kwargs):
+        self._worker = self.__do_work(*args, **kwargs)
+        if not self.parseque:
+            print('gotta use next method')
+            try:
+                return self._worker.next()
+            except StopIteration:
+                return None
 
     def do_work(self):
         self.transport.seek(0)
@@ -329,13 +355,15 @@ class mockcontainer(object):
     def __init__(self, s, transport=StringIO, postparse=postparse):
         self.transport = transport(s)
         self.parseque = deque()
+        self.postparse = postparse
+        #self.postparse = staticmethod(postparse)
         self.preparse = scan_sexp()
         self.preparse.next()
-        self.postparse = staticmethod(postparse)
 
 
 if __name__ == '__main__':
     from time import time
+    import sys
     itx = 1000
     rit = xrange(itx)
 
@@ -347,16 +375,20 @@ if __name__ == '__main__':
 
     print 'Test to the s-exp parser:'
     print
-    tobj = mockcontainer(text)
-    #tobj = mockcontainer('imapsession-1275238402.04.log', partial(open, mode='r'))
+    #tobj = mockcontainer(text)
+    sesslog = 'imapsession-1275238402.04.log'
+    if len(sys.argv) > 1:
+        sesslog = sys.argv[1]
+    tobj = mockcontainer(sesslog, partial(open, mode='r'))
+    tobj.do_work()
 
-    print 'Non Recursive (%d times):' % itx
-    a = time()
-    for i in rit:
-        tobj.do_work()
-    b = time()
-    print 1000 * (b-a) / itx, 'ms/iter'
-    print itx, ' --> ', 1000 * (b-a) , 'ms'
-    print
+    #print 'Non Recursive (%d times):' % itx
+    #a = time()
+    #for i in rit:
+        #    tobj.do_work()
+    #b = time()
+    #print 1000 * (b-a) / itx, 'ms/iter'
+    #print itx, ' --> ', 1000 * (b-a) , 'ms'
+    #print
     #print tobj.parseque
 

@@ -50,7 +50,7 @@ from utils import Int2AP, command
 from parser import lexer_loop, scan_sexp, postparse
 from response_handler import response_handler
 from errors import Error, Abort, ReadOnly, NotYet
-from imapcommands import COMMANDS, EXEMPT_CMDS, STATUS
+from imapcommands import COMMANDS, EXEMPT_CMDS, STATUS, STATE_MAP
 from imapcommands import AUTH, NONAUTH, SELECTED, LOGOUT
 
 # Constants
@@ -58,6 +58,43 @@ from imapcommands import AUTH, NONAUTH, SELECTED, LOGOUT
 Debug = 0
 
 CRLF = '\r\n'
+
+class session(object):
+    __folders = {}
+
+    @property
+    def _folders(self):
+        return self.__folders.setdefault(self.server, {})
+
+    def __init__(self, connect_args):
+        self.server = connect_args
+        self._state = deque(maxlen=3)
+        self._state_lock = Lock()
+        self.folder = None
+        self.writable = None
+        self.capabilities = []
+        self.namespace = []
+
+    _state_set = lambda x,y: x._state.append(y)
+    _state_get = lambda x: x._state[-1]
+    _state_del = lambda x: x._state.pop()
+    state = property(_state_get, _state_set, _state_del, "This is the state property.")
+
+
+class imap_folder(object):
+    __slots__ = ('exists', 'recent', 'flags', 'permanentflags', 'unseen',
+                 'uidvalidity', 'name', 'path', 'separator', 'depth',
+                 'namespace', 'rights', 'uidnext')
+
+    def __getitem__(self, key):
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise IndexError('nothing with that key exists')
+
+    def __init__(self, name):
+        [setattr(self, x, None) for x in self.__slots__]
+        self.name = name
 
 
 class imapll(object):
@@ -108,7 +145,7 @@ class imapll(object):
         tag, response = M.send_command('LOGOUT' )
     """
 
-    def __init__(self, transport, response_handler=response_handler):
+    def __init__(self, transport, transport_args, response_handler=response_handler):
         # Create unique tag for this session,
         # and compile tagged response matcher.
         self.tagpre = Int2AP(random.randint(4096, 65535))
@@ -119,7 +156,7 @@ class imapll(object):
         self.postparse = staticmethod(postparse)
 
         self._response_runner = None
-        self._state = deque(maxlen=3)
+        self._state = deque(maxlen=30)
         self._state_lock = Lock()
         self._cmdque = deque()
         self._tagref = WeakValueDictionary()
@@ -130,10 +167,12 @@ class imapll(object):
 
 
         # Connection to the server
-        self.transport = transport
+        self.transport = transport(*transport_args)
+        self.session = session(transport_args)
 
 
 
+        '''
         self.welcome = self._get_response()
 
         if 'PREAUTH' in self.welcome:
@@ -142,13 +181,16 @@ class imapll(object):
             self.state = 'NONAUTH'
         else:
             raise Error(self.welcome)
+        '''
 
     
 
+    '''
     _state_set = lambda x,y: x._state.append(y)
     _state_get = lambda x: x._state[-1]
     _state_del = lambda x: x._state.pop()
     state = property(_state_get, _state_set, _state_del, "This is the state property.")
+    '''
 
     _get_response = lexer_loop
 
@@ -157,7 +199,19 @@ class imapll(object):
             self._response_runner = self._get_response()
 
         try:
-            return self._response_runner.next()
+            while 1:
+                r = self._response_runner.next()
+                if not r:
+                    # only time response_runner yields nothing is when
+                    # readline doesn't return a line. possible causes of this
+                    # are: socket has been "greened" and is async, or there is
+                    # no more connection.
+                    raise Error("connection has been closed or an async"
+                                "library is being used, and we don't know what"
+                                "do for those")
+                else:
+                    r = self.response_handler(r)
+                    if r: yield r
         except StopIteration:
             self._response_runner = None
             raise Error
@@ -172,17 +226,18 @@ class imapll(object):
 
     def _get_response2(self):
         if self._response_runner is None:
-            self._response_runner = self._init_lexer_loop(container=self._dispatchque)
+            self._response_runner = self._init_lexer_loop()
+            #self._response_runner = self._init_lexer_loop(container=self._dispatchque)
             #self._response_runner = self._get_response(container=self._dispatchque)
 
-        response = self._dispatchque.popleft()
-        return self.response_handler(response)
+        #response = self._dispatchque.popleft()
+        #return self.response_handler(response)
 
 
 
     # SEND/RECEIVE commands from the server
 
-    def send_command(self, command):
+    def send_command(self, cmd):
         """
         Send a command to the server:
 
@@ -200,19 +255,27 @@ class imapll(object):
             - tag: the tag used on the sent command;
             - response from the server to the sent command (only if read_resp);
         """
-        self._cmdque.append(command)
+        self._cmdque.append(cmd)
+        self._send_command()
+        return cmd.responses
 
+
+    def _send_command(self):
         with self._state_lock:
-            if (self.state not in COMMANDS[command.cmd] and
-                    command.cmd not in EXEMPT_CMDS):
-                return
-            cmd = command.format(self)
-            tag = command.tag
-            self._tagref[tag] = command
+            cmd = self._cmdque[0]
+            if (self.state not in COMMANDS[cmd.cmd] and
+                cmd.cmd not in EXEMPT_CMDS):
+                if type(self.state) is command:
+                    return #let the response handler run it
+                else:
+                    raise Abort('Invalid session state for command that was  attempted to be run. command was %s, state is %s' % (cmd, STATE_MAP[self.state]))
+            cmd = self._cmdque.popleft()
+            cmdstr = cmd.format(self)
+            tag = cmd.tag
+            self._tagref[tag] = cmd
             self.state = tag
-            self._transport.write(cmd)
+            self._transport.write(cmdstr)
 
-        return command.responses
 
     def _new_tag(self):
         """Returns a new tag."""
@@ -223,7 +286,6 @@ class imapll(object):
 
 
 class imap_client(imapll):
-
 
     # Any State
 

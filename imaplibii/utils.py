@@ -39,6 +39,7 @@ from email.header import decode_header
 from platform import python_version
 from functools import wraps
 from cPickle import dumps
+import logging
 
 from errors import NotAvailable, ValueMissing
 
@@ -354,6 +355,11 @@ def autonext(f):
 
 # Classes
 
+class null_handler(logging.Handler):
+    def emit(self, record):
+        pass
+
+
 class _blank(object):
     __slots__ = ()
     __repr__ = lambda self: 'Blank'
@@ -412,12 +418,13 @@ class continuations(deque):
     def _cointeract(self, action, *args, **kwargs):
         """
         Actually runs the desired method with the appropriate args
-        on the generator. This is based on the command dispatch pattern.
+        on the generator. Done this way to avoid code repeatition.
         """
         try: return getattr(self._runner, action)(*args, **kwargs)
         except (AttributeError, StopIteration):
             #either the trampoline schedular was left in a stopped state
-            #the last time it was used, or it has never been used.
+            #the last time it was used, or it has never been used. either way
+            #do the same thing.
             self._runner = self._trampoline()
             return getattr(self, action)(*args)
         except IndexError: # Empty list
@@ -474,13 +481,16 @@ class continuations(deque):
 
 
 class command(object):
-    def __init__(self, cmd, args=None, continuation=None, **kwargs):
+    def __init__(self, cmd, args=None, continuation=None, response_cb=None,
+                 completion_cb=None, **kwargs):
         self.cmd = cmd
         self.args = args
         self.kwargs = kwargs
         self.continuation = continuations(continuation)
         self.tag = None
         self.responses = None
+        self.response_cb = response_cb
+        self.completion_cb = completion_cb
 
 
     def format(self, imap_session):

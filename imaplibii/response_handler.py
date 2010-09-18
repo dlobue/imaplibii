@@ -2,6 +2,7 @@
 
 from weakref import proxy
 
+from utils import command, null_handler
 from imapcommands import AUTH, NONAUTH, SELECTED, LOGOUT
 from errors import Error, Abort
 
@@ -11,10 +12,14 @@ class response_handler(object):
 
     def __call__(self, response):
         try:
-            m = '%s_%s' % (response.__class__.__name__, response.rtype)
+            m = '%s_%s' % (response.__class__.__name__, response.type)
         except AttributeError:
             m = response.__class__.__name__
-        return getattr(self, m)(response)
+        try:
+            cmd = self._imapll.state.cmd
+            return getattr(self, '%s_%s' % (cmd, m))(response)
+        except AttributeError:
+            return getattr(self, m)(response)
 
 
     def continuation(self, response):
@@ -34,10 +39,13 @@ class response_handler(object):
         It indicates that the connection is not yet authenticated and that a
         LOGIN command is needed.
         """
-        with self._imapll._state_lock:
-            if self._imapll.state is LOGOUT:
-                self._imapll.state = NONAUTH
-                self._imapll.welcome = response
+        if type(self._imapll.state) is command:
+            pass
+        else:
+            with self._imapll._state_lock:
+                if self._imapll.state is LOGOUT:
+                    self._imapll.state = NONAUTH
+                    self._imapll.welcome = response
 
 
     def untagged_no(self, response):
@@ -66,9 +74,14 @@ class response_handler(object):
                 self._imapll.welcome = response
 
     def tagged_ok(self, response):
+        ccb = self._imapll._tagref[response.tag].completion_cb
+        if ccb is not None:
+            ccb(response)
         with self._imapll._state_lock:
             assert self._imapll.state == response.tag
             del self._imapll.state
+        #XXX: check command queue for next command and send it
+        #XXX: if command queue is empty, kill loop?
 
     def tagged_no(self, response):
         with self._imapll._state_lock:
@@ -129,5 +142,25 @@ class response_handler(object):
     def untagged_fetch(self, response):
         cmd = self._imapll._tagref[self._imapll.state]
         cmd.responses.append(response)
+
+
+    # command-specific handling of common response types
+
+    def select_untagged_ok(self, response):
+        if response.data.data and response.data.data[0] in \
+            self._imapll.session.folder.__slots__:
+            setattr(self._imapll.session.folder, response.data.data[0],
+                    response.data.data[1])
+
+        return self.untagged_ok(response)
+
+    def select_tagged_ok(self, response):
+        if response.data.data and response.data.data[0] == 'read-only':
+            self._imapll.session.writable = False
+        else:
+            self._imapll.session.writable = True
+
+        return self.untagged_ok(response)
+
 
 

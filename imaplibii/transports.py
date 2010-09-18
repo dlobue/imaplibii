@@ -7,8 +7,12 @@ import logging
 from cStringIO import StringIO
 from platform import system
 from subprocess import PIPE, Popen
-from utils import min_ver_chk
+from utils import min_ver_chk, null_handler
 
+nh = null_handler()
+logger = logging.getLogger("imaplibii.transports")
+logger.addHandler(nh)
+#logger.addHandler(logging.StreamHandler())
 
 from errors import Error, Abort, ReadOnly
 
@@ -30,33 +34,34 @@ else:
 
 
 class stream(object):
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         self.state = CLOSED
+        self._init(*args, **kwargs)
 
     def close(self):
-        logging.debug('Closing connection')
+        logger.info('Closing connection')
         try: return self._close()
         finally: self.state = CLOSED
 
-    def open(self, *args):
+    def open(self, *args, **kwargs):
         e = 'Opening connection to IMAP server on %s transport' %\
             self.__class__.__name__
-        logging.info(e)
-        r = self._open(*args)
+        logger.info(e)
+        r = self._open(*args, **kwargs)
         self.state = OPEN
         return r
 
     def read(self, size=-1):
-        logging.debug('S: Read %d bytes from the server.' % size)
+        logger.debug('S: Read %d bytes from the server.' % size)
         return self._read(size)
 
     def readline(self):
         line = self._readline()
-        logging.debug('S: %s' % line.replace(CRLF,'<cr><lf>'))
+        logger.debug('S: %s' % line.replace(CRLF,'<cr><lf>'))
         return line
 
     def write(self, data):
-        logging.debug('C: %s' % data.replace(CRLF,'<cr><lf>'))
+        logger.debug('C: %s' % data.replace(CRLF,'<cr><lf>'))
         return self._write(data)
 
     def flush(self):
@@ -70,6 +75,11 @@ class stream(object):
 
 
 class tcp_stream(stream):
+    def _init(self, host, port=IMAP_PORT):
+        self.host = host
+        self.port = port
+        self.open(host, port)
+
     def _open(self, host, port=IMAP_PORT):
         self.sock = self._open_socket(host, port)
         self.file = self.sock.makefile('rb')
@@ -237,4 +247,14 @@ class process_stream(stream):
         self.readfile.close()
         self.writefile.close()
         self.sock.wait()
+
+
+
+if __name__ == '__main__':
+    mylogger = logging.getLogger('imaplibii')
+    mylogger.setLevel(logging.DEBUG)
+    mylogger.addHandler(logging.StreamHandler())
+    server = '192.168.0.17'
+
+    tr = tcp_stream(server)
 
