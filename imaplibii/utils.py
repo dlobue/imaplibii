@@ -41,7 +41,7 @@ from functools import wraps
 from cPickle import dumps
 import logging
 
-from errors import NotAvailable, ValueMissing
+from errors import NotAvailable, ValueMissing, DoNotUse
 
 CRLF = '\r\n'
 
@@ -150,7 +150,14 @@ def makeTagged(t):
     return r
 
 
-def unquote( string ):
+def unquote(s):
+    return s.strip("'\"")
+
+def quote(s):
+    s = '"%s"' % s
+    return s
+
+def old_unquote( string ):
     if len(string) > 0:
         if string[0] == string[-1] == '"' or \
            string[0] == string[-1] == '\'':
@@ -392,10 +399,6 @@ class continuations(deque):
     Use the next method to get the next response in line.
 
     """
-    def __init__(self, *args):
-        deque.__init__(self)
-        self.put(args)
-
     def send(self, arg):
         return self._cointeract('send', arg)
 
@@ -410,6 +413,7 @@ class continuations(deque):
     throw.__doc__ = GeneratorType.throw.__doc__
 
     def put(self, item):
+        raise DoNotUse
         if type(item) is not GeneratorType and isinstance(item, Iterable):
             map(self.put, item)
         elif item is not None:
@@ -483,10 +487,16 @@ class continuations(deque):
 class command(object):
     def __init__(self, cmd, args=None, continuation=None, response_cb=None,
                  completion_cb=None, **kwargs):
+
+        if type(continuation) is str:
+            continuation = [continuation]
+        if continuation is not None:
+            continuation = continuations(continuation)
+
         self.cmd = cmd
         self.args = args
         self.kwargs = kwargs
-        self.continuation = continuations(continuation)
+        self.continuation = continuation
         self.tag = None
         self.responses = None
         self.response_cb = response_cb

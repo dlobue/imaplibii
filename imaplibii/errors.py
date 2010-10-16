@@ -1,5 +1,7 @@
 
 
+class DoNotUse(Exception): pass
+
 
 class Error(Exception):
     """Logical errors - debug required"""
@@ -10,4 +12,7 @@ class ReadOnly(Exception):
 
 class NotAvailable(Exception): pass
 
+class NotYet(Exception): pass
+
 class ValueMissing(Exception): pass
+
